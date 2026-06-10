@@ -35,7 +35,7 @@ module.exports = {
     },
     {
       name: 'karamooz-web',
-      script: 'node_modules/.bin/next',
+      script: 'node_modules/next/dist/bin/next',
       args: 'start -p 9100',
       cwd: './apps/web',
       instances: 1,
