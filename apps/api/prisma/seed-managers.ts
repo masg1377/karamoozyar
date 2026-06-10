@@ -18,6 +18,7 @@ const MANAGERS = [
     password: 'Mahdi@Asghari1404',
     judicialDomain: 'مرکزی',
     expertiseField: 'مدیریت',
+    role: Role.ADMIN,
   },
   {
     nationalId: '0000000003',
@@ -27,6 +28,17 @@ const MANAGERS = [
     password: 'MohReza@Asghari1404',
     judicialDomain: 'مرکزی',
     expertiseField: 'مدیریت',
+    role: Role.ADMIN,
+  },
+  {
+    nationalId: '2092108018',
+    firstName: 'فرشته',
+    lastName: 'خداشناس',
+    phoneNumber: '09910262500',
+    password: 'Fereshteh@1404',
+    judicialDomain: 'مرکزی',
+    expertiseField: 'عمومی',
+    role: Role.USER,
   },
 ];
 
@@ -41,7 +53,7 @@ async function main(): Promise<void> {
         firstName: m.firstName,
         lastName: m.lastName,
         phoneNumber: m.phoneNumber,
-        role: Role.ADMIN,
+        role: m.role,
         isActive: true,
         passwordHash: hash,
       },
@@ -52,17 +64,26 @@ async function main(): Promise<void> {
         phoneNumber: m.phoneNumber,
         judicialDomain: m.judicialDomain,
         expertiseField: m.expertiseField,
-        role: Role.ADMIN,
+        role: m.role,
         isActive: true,
         passwordHash: hash,
       },
     });
 
+    // Create conversation for USER role (needed for chat)
+    if (m.role === Role.USER) {
+      await prisma.conversation.upsert({
+        where: { userId: user.id },
+        update: {},
+        create: { userId: user.id },
+      });
+    }
+
     console.log(`✅ ${user.firstName} ${user.lastName}`);
     console.log(`   کد ملی  : ${m.nationalId}`);
     console.log(`   موبایل  : ${m.phoneNumber}`);
     console.log(`   پسورد   : ${m.password}`);
-    console.log(`   نقش     : ADMIN\n`);
+    console.log(`   نقش     : ${m.role}\n`);
   }
 
   console.log('🎉 Done.');
