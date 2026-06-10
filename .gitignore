@@ -1,0 +1,52 @@
+# dependencies
+node_modules
+.pnp
+.pnp.js
+
+# turbo
+.turbo
+
+# build outputs
+.next
+dist
+build
+out
+
+# env files
+.env
+.env.local
+.env.development
+.env.production
+.env*.local
+!.env.example
+!.env.*.example
+
+# prisma
+prisma/migrations/*/migration.sql
+!prisma/migrations
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# testing
+coverage
+
+# uploads (local dev)
+uploads/
+
+# misc
+*.tsbuildinfo

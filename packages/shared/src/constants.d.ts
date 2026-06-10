@@ -1,0 +1,51 @@
+export declare const FILE_LIMITS: {
+    readonly MAX_SIZE_BYTES: number;
+    readonly MAX_SIZE_MB: 15;
+};
+export declare const ALLOWED_MIME_TYPES: readonly ["image/jpeg", "image/png", "image/webp", "image/gif", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/webm", "audio/wav", "application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/zip", "application/x-zip-compressed", "text/plain"];
+export type AllowedMimeType = (typeof ALLOWED_MIME_TYPES)[number];
+export declare const IMAGE_MIME_TYPES: readonly ["image/jpeg", "image/png", "image/webp", "image/gif"];
+export declare const VOICE_MIME_TYPES: readonly ["audio/ogg", "audio/mpeg", "audio/mp4", "audio/webm", "audio/wav"];
+export declare const SOCKET_EVENTS: {
+    readonly CHAT_JOIN: "chat:join";
+    readonly CHAT_LEAVE: "chat:leave";
+    readonly CHAT_SEND: "chat:send";
+    readonly CHAT_TYPING_START: "chat:typing:start";
+    readonly CHAT_TYPING_STOP: "chat:typing:stop";
+    readonly CHAT_SEEN: "chat:seen";
+    readonly CHAT_EDIT: "chat:edit";
+    readonly CHAT_DELETE: "chat:delete";
+    readonly NEWSLETTER_JOIN: "newsletter:join";
+    readonly NEWSLETTER_SEEN: "newsletter:seen";
+    readonly NEWSLETTER_REACT: "newsletter:react";
+    readonly NEWSLETTER_REACT_REMOVE: "newsletter:react:remove";
+    readonly CHAT_MESSAGE_NEW: "chat:message:new";
+    readonly CHAT_MESSAGE_UPDATED: "chat:message:updated";
+    readonly CHAT_MESSAGE_DELETED: "chat:message:deleted";
+    readonly CHAT_MESSAGE_SEEN: "chat:message:seen";
+    readonly CHAT_TYPING: "chat:typing";
+    readonly CHAT_CONVERSATION_UPDATED: "chat:conversation:updated";
+    readonly CHAT_ERROR: "chat:error";
+    readonly NEWSLETTER_POST_NEW: "newsletter:post:new";
+    readonly NEWSLETTER_POST_UPDATED: "newsletter:post:updated";
+    readonly NEWSLETTER_POST_DELETED: "newsletter:post:deleted";
+    readonly NEWSLETTER_REACTION_UPDATED: "newsletter:reaction:updated";
+    readonly NEWSLETTER_SEEN_UPDATED: "newsletter:seen:updated";
+    readonly NOTIFICATION_UNREAD: "notification:unread";
+    readonly NOTIFICATION_BADGE: "notification:badge";
+};
+export declare const SOCKET_ROOMS: {
+    readonly admin: () => string;
+    readonly newsletter: () => string;
+    readonly conversation: (id: string) => string;
+    readonly user: (id: string) => string;
+};
+export declare const OTP_LENGTH = 6;
+export declare const OTP_EXPIRY_SECONDS = 120;
+export declare const PAGINATION: {
+    readonly DEFAULT_LIMIT: 30;
+    readonly MAX_LIMIT: 100;
+    readonly MESSAGES_LIMIT: 30;
+    readonly NEWSLETTER_LIMIT: 20;
+    readonly USERS_LIMIT: 20;
+};

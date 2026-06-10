@@ -1,0 +1,343 @@
+// ════════════════════════════════════════════════════════════
+// KarAmoozYar — Prisma Schema
+// ════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  FILE
+  VOICE
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  SEEN
+}
+
+enum ReactionEmoji {
+  LIKE
+  DISLIKE
+  PRAY
+  OK
+  ROSE
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+// ─────────────────────────────────────────────
+// USER
+// ─────────────────────────────────────────────
+
+model User {
+  id             String   @id @default(cuid())
+  nationalId     String   @unique
+  firstName      String
+  lastName       String
+  phoneNumber    String   @unique
+  judicialDomain String
+  expertiseField String
+  role           Role     @default(USER)
+  isActive       Boolean  @default(true)
+  passwordHash   String?
+  avatarUrl      String?  // legacy URL kept for backward compat
+
+  // Extended profile fields
+  fatherName               String?
+  birthCertificateNumber   String?
+  birthDate                DateTime?
+  gender                   Gender?
+  residenceProvince        String?
+  residenceCity            String?
+  profileImageAttachmentId String?  // FK to newsletter_attachments (reuses upload system)
+
+  lastSeenAt DateTime?  // updated when user/admin opens a conversation
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  conversation        Conversation?
+  sentMessages        Message[]            @relation("SentMessages")
+  messageSeen         MessageSeen[]
+  refreshTokens       RefreshToken[]
+  newsletterSeen      NewsletterSeen[]
+  newsletterReactions NewsletterReaction[]
+  newsletterPosts     NewsletterPost[]     @relation("NewsletterAuthor")
+  auditLogs           AuditLog[]
+
+  @@index([nationalId])
+  @@index([role])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// CONVERSATION (1 per user ↔ admin)
+// ─────────────────────────────────────────────
+
+model Conversation {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id])
+  lastMessageAt   DateTime?
+  lastMessageText String?
+  unreadByAdmin   Int       @default(0)
+  unreadByUser    Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages Message[]
+
+  @@index([lastMessageAt(sort: Desc)])
+  @@map("conversations")
+}
+
+// ─────────────────────────────────────────────
+// MESSAGE
+// ─────────────────────────────────────────────
+
+model Message {
+  id             String        @id @default(cuid())
+  conversationId String
+  conversation   Conversation  @relation(fields: [conversationId], references: [id])
+  senderId       String
+  sender         User          @relation("SentMessages", fields: [senderId], references: [id])
+  type           MessageType   @default(TEXT)
+  body           String?
+  isEdited       Boolean       @default(false)
+  editedAt       DateTime?
+  status         MessageStatus @default(SENT)
+  deletedAt      DateTime?
+  deletedBy      String?
+
+  // Pin support
+  pinnedAt       DateTime?   // null = not pinned; non-null = pinned at this time
+  pinnedBy       String?     // userId who pinned (for audit)
+
+  // Reply support
+  replyToMessageId String?
+  replyToMessage   Message?  @relation("MessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies          Message[] @relation("MessageReplies")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attachment MessageAttachment?
+  seenBy     MessageSeen[]
+
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@index([conversationId, pinnedAt(sort: Desc)])
+  @@index([senderId])
+  @@index([deletedAt])
+  @@index([replyToMessageId])
+  @@map("messages")
+}
+
+model MessageAttachment {
+  id        String  @id @default(cuid())
+  messageId String  @unique
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  fileName  String
+  fileKey   String
+  fileUrl   String
+  mimeType  String
+  fileSize  Int
+  duration  Int?
+
+  createdAt DateTime @default(now())
+
+  @@map("message_attachments")
+}
+
+model MessageSeen {
+  id        String   @id @default(cuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  seenAt    DateTime @default(now())
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+  @@map("message_seen")
+}
+
+// ─────────────────────────────────────────────
+// NEWSLETTER
+// ─────────────────────────────────────────────
+
+model NewsletterPost {
+  id            String      @id @default(cuid())
+  authorId      String
+  author        User        @relation("NewsletterAuthor", fields: [authorId], references: [id])
+  type          MessageType @default(TEXT)
+  title         String?
+  body          String?     // legacy plain-text body (kept for backward compat)
+  contentBlocks Json?       // ordered array of NewsletterBlock
+  hashtags      String[]    @default([])
+  isEdited      Boolean     @default(false)
+  editedAt      DateTime?
+  isPinned      Boolean     @default(false)
+
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attachments NewsletterAttachment[]
+  reactions   NewsletterReaction[]
+  seenBy      NewsletterSeen[]
+
+  @@index([createdAt(sort: Desc)])
+  @@index([isPinned])
+  @@index([deletedAt])
+  @@map("newsletter_posts")
+}
+
+model NewsletterAttachment {
+  id       String          @id @default(cuid())
+  postId   String?
+  post     NewsletterPost? @relation(fields: [postId], references: [id], onDelete: Cascade)
+  fileName String
+  fileKey  String
+  fileUrl  String
+  mimeType String
+  fileSize Int
+  duration Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([postId])
+  @@map("newsletter_attachments")
+}
+
+model NewsletterReaction {
+  id     String        @id @default(cuid())
+  postId String
+  post   NewsletterPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId String
+  user   User          @relation(fields: [userId], references: [id])
+  emoji  ReactionEmoji
+
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
+  @@index([postId])
+  @@map("newsletter_reactions")
+}
+
+model NewsletterSeen {
+  id     String         @id @default(cuid())
+  postId String
+  post   NewsletterPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId String
+  user   User           @relation(fields: [userId], references: [id])
+  seenAt DateTime       @default(now())
+
+  @@unique([postId, userId])
+  @@index([postId])
+  @@map("newsletter_seen")
+}
+
+// ─────────────────────────────────────────────
+// AUTH
+// ─────────────────────────────────────────────
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  userAgent String?
+  ipAddress String?
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────
+// NOTIFICATION LOG
+// ─────────────────────────────────────────────
+
+enum NotificationType {
+  INACTIVITY_SMS
+}
+
+enum NotificationChannel {
+  SMS
+}
+
+enum NotificationStatus {
+  SENT
+  FAILED
+  SKIPPED
+}
+
+model NotificationLog {
+  id             String              @id @default(cuid())
+  userId         String?
+  adminId        String?
+  conversationId String?
+  type           NotificationType
+  channel        NotificationChannel
+  sentAt         DateTime            @default(now())
+  status         NotificationStatus  @default(SENT)
+  metadata       Json?
+
+  @@index([userId, type, sentAt(sort: Desc)])
+  @@index([adminId, type, sentAt(sort: Desc)])
+  @@index([conversationId])
+  @@map("notification_logs")
+}
+
+// ─────────────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────────────
+
+model AuditLog {
+  id         String  @id @default(cuid())
+  userId     String
+  user       User    @relation(fields: [userId], references: [id])
+  action     String
+  resource   String
+  resourceId String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([action])
+  @@map("audit_logs")
+}
