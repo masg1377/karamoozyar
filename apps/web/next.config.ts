@@ -7,6 +7,7 @@ const nextConfig: NextConfig = {
     typedRoutes: false,
   },
   images: {
+    unoptimized: true,
     remotePatterns: [
       {
         protocol: 'http',
