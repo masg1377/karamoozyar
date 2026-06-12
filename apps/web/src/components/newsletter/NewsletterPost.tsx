@@ -353,7 +353,7 @@ export function NewsletterPostCard({ post, isAdmin, onEdit, onDelete, onPin }: N
   const firstImageIdx = sortedBlocks.findIndex((b) => b.type === 'IMAGE');
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+    <div className="overflow-hidden">
       {/* Banner */}
       {firstImageIdx >= 0 && sortedBlocks[firstImageIdx]?.attachmentId && (
         <BannerImage block={sortedBlocks[firstImageIdx]!} full />

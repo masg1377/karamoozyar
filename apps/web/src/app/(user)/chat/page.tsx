@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth.store';
 import { useChatStore } from '@/store/chat.store';
 import { useMessages } from '@/hooks/useMessages';
@@ -16,6 +17,7 @@ import { toast } from 'sonner';
 import { ChevronUp, Shield } from 'lucide-react';
 
 export default function UserChatPage() {
+  const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const [conversation, setConversation] = useState<ConversationDetailDto | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -151,17 +153,25 @@ export default function UserChatPage() {
     <div className="h-full flex flex-col overflow-hidden">
 
       {/* ── Chat header ───────────────────────────────────────── */}
-      <div className="flex-shrink-0 bg-white border-b border-gray-100 px-4 py-3 flex items-center gap-3 shadow-sm">
+      <div className="flex-shrink-0 bg-white/90 backdrop-blur-md border-b border-blue-100/60 px-4 py-3 flex items-center gap-3">
         <div className="relative">
-          <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-700 rounded-full flex items-center justify-center text-white flex-shrink-0 shadow-sm">
+          <div
+            className="w-10 h-10 rounded-xl flex items-center justify-center text-white flex-shrink-0"
+            style={{ background: 'linear-gradient(135deg, #0ABDE3, #0779A0)' }}
+          >
             <Shield className="w-5 h-5" />
           </div>
-          <span className="absolute bottom-0 left-0 w-3 h-3 bg-green-400 border-2 border-white rounded-full" />
+          <span className="absolute bottom-0 left-0 w-2.5 h-2.5 bg-green-400 border-2 border-white rounded-full" />
         </div>
-        <div>
+        <div className="flex-1">
           <p className="text-sm font-bold text-gray-800">مدیریت مرکز</p>
           <p className="text-xs text-green-500 font-medium">آنلاین</p>
         </div>
+        <button onClick={() => router.back()} className="text-gray-400 hover:text-gray-600">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-5 h-5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
       </div>
 
       {/* ── Pinned messages bar ─────────────────────────────────── */}
@@ -176,7 +186,7 @@ export default function UserChatPage() {
       <div
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5"
-        style={{ background: 'linear-gradient(180deg, #f0f4f8 0%, #f8fafc 100%)' }}
+        style={{ background: 'linear-gradient(180deg, #D4EDFB 0%, #EBF5FF 50%, #F2F8FF 100%)' }}
         onScroll={handleScroll}
       >
         {canLoadMore && (
@@ -233,7 +243,7 @@ export default function UserChatPage() {
       </div>
 
       {/* ── Input bar ──────────────────────────────────────────── */}
-      <div className="flex-shrink-0 bg-white border-t border-gray-100">
+      <div className="flex-shrink-0 bg-white/90 backdrop-blur-md border-t border-blue-100/60">
         <MessageInput
           conversationId={conversationId}
           editingMessage={editingMessage}

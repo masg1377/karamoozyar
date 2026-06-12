@@ -309,7 +309,7 @@ export function MessageInput({
             onKeyDown={handleKeyDown}
             onFocus={() => { if (showEmoji) setShowEmoji(false); }}
             onBlur={() => handleTyping(false)}
-            placeholder="پیام بنویسید..."
+            placeholder="ارسال پیام..."
             rows={1}
             disabled={disabled || isRecording}
             className="w-full resize-none bg-gray-50 rounded-2xl px-4 py-2 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-primary-200 transition-all max-h-32 leading-relaxed block"

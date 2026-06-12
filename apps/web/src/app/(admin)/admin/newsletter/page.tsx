@@ -67,15 +67,22 @@ export default function AdminNewsletterPage() {
   );
 
   return (
-    <div className="max-w-3xl mx-auto space-y-4 animate-fade-in p-4">
-      <div className="flex items-center justify-between">
+    <div style={{ height: '100%', overflowY: 'auto' }}>
+    <div style={{ padding: '16px 16px calc(96px + env(safe-area-inset-bottom))', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
-          <h1 className="text-2xl font-bold text-gray-800">خبرنامه</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{posts.length} پست منتشر شده</p>
+          <h1 style={{ fontSize: 18, fontWeight: 700, color: '#1e293b', margin: 0 }}>خبرنامه</h1>
+          <p style={{ fontSize: 12, color: '#94a3b8', margin: '2px 0 0' }}>{posts.length} پست منتشر شده</p>
         </div>
         <button
           onClick={() => setComposerOpen(true)}
-          className="flex items-center gap-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-colors shadow-sm"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: '#0ABDE3', color: 'white',
+            fontSize: 13, fontWeight: 600,
+            padding: '8px 14px', borderRadius: 12,
+            border: 'none', cursor: 'pointer',
+          }}
         >
           <Plus className="w-4 h-4" /> پست جدید
         </button>
@@ -141,6 +148,7 @@ export default function AdminNewsletterPage() {
           )}
         </>
       )}
+    </div>
     </div>
   );
 }

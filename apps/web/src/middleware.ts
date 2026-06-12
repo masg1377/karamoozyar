@@ -6,6 +6,9 @@ const ADMIN_PATHS = ['/admin'];
 export function middleware(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;
 
+  // Splash screen — always allow root exactly
+  if (pathname === '/') return NextResponse.next();
+
   // Allow public paths
   if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
     return NextResponse.next();

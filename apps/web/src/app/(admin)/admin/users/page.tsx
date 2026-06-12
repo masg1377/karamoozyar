@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import api from '@/lib/api-client';
 import type { UserDto, UserProfileDto } from '@karamooziyar/shared';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
@@ -80,8 +81,9 @@ function CreateUserModal({ onClose, onCreated }: CreateModalProps) {
 
   const canSubmit = form.firstName && form.lastName && form.nationalId.length === 10 && form.phoneNumber && form.judicialDomain && form.expertiseField;
 
-  return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div className="fixed inset-0 bg-black/40 z-[200] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
       <div
         className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[90dvh] flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
@@ -146,7 +148,8 @@ function CreateUserModal({ onClose, onCreated }: CreateModalProps) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -240,8 +243,9 @@ function EditUserModal({ userId, onClose, onSaved }: EditModalProps) {
   const avatarUrl = profile?.profileImageUrl ?? profile?.avatarUrl;
   const initials = `${form.firstName[0] ?? ''}${form.lastName[0] ?? ''}`;
 
-  return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div className="fixed inset-0 bg-black/40 z-[200] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
       <div
         className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[90dvh] flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
@@ -326,7 +330,8 @@ function EditUserModal({ userId, onClose, onSaved }: EditModalProps) {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -456,19 +461,20 @@ export default function AdminUsersPage() {
   const activeCount = users.filter((u) => u.isActive).length;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-4">
+    <div style={{ height: '100%', overflowY: 'auto' }}>
+    <div style={{ padding: '16px 16px calc(96px + env(safe-area-inset-bottom))', display: 'flex', flexDirection: 'column', gap: 14 }}>
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
-          <h1 className="text-xl font-bold text-gray-800">مدیریت کارآموزان</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{total} نفر ثبت‌نام شده</p>
+          <h1 style={{ fontSize: 16, fontWeight: 700, color: '#1e293b', margin: 0 }}>مدیریت کارآموزان</h1>
+          <p style={{ fontSize: 12, color: '#94a3b8', margin: '3px 0 0' }}>{total} نفر ثبت‌نام شده</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors shadow-sm"
+          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'linear-gradient(135deg, #0ABDE3, #0897B8)', color: 'white', fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 14, border: 'none', cursor: 'pointer' }}
         >
           <UserPlus className="w-4 h-4" />
-          افزودن کارآموز
+          افزودن
         </button>
       </div>
 
@@ -591,6 +597,7 @@ export default function AdminUsersPage() {
       {/* Modals */}
       {showCreate && <CreateUserModal onClose={() => setShowCreate(false)} onCreated={() => loadUsers(1, search)} />}
       {editingUserId && <EditUserModal userId={editingUserId} onClose={() => setEditingUserId(null)} onSaved={() => loadUsers(page, search)} />}
+    </div>
     </div>
   );
 }

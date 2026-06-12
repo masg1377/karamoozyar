@@ -119,42 +119,59 @@ export default function AdminNewsletterDetailPage() {
   if (!post) return null;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-4 animate-fade-in p-4">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between">
-        <button onClick={() => router.back()}
-          className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 transition-colors">
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+      {/* ── Sticky Toolbar ── */}
+      <div style={{
+        flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '10px 16px',
+        background: '#F6F7F9',
+        borderBottom: '1px solid rgba(0,0,0,0.06)',
+        zIndex: 5,
+      }}>
+        <button
+          onClick={() => router.back()}
+          style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', cursor: 'pointer', color: '#475569', fontSize: 13, padding: 0 }}
+        >
           <ArrowRight className="w-4 h-4" />
           <span>خبرنامه</span>
         </button>
 
-        <div className="flex items-center gap-1.5">
-          <button onClick={() => setShowSeen(true)}
-            className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 px-2.5 py-1.5 rounded-lg transition-colors">
-            <Eye className="w-3.5 h-3.5 flex-shrink-0" />
-            <span className="hidden sm:inline">{post.seenCount} بازدید</span>
-            <span className="sm:hidden">{post.seenCount}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            onClick={() => setShowSeen(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#475569', background: 'rgba(0,0,0,0.05)', border: 'none', cursor: 'pointer', padding: '5px 10px', borderRadius: 8 }}
+          >
+            <Eye className="w-3.5 h-3.5" />
+            <span>{post.seenCount}</span>
           </button>
-          <button onClick={handlePin}
-            className="flex items-center gap-1.5 text-xs text-amber-600 bg-amber-50 hover:bg-amber-100 px-2.5 py-1.5 rounded-lg transition-colors">
-            {post.isPinned ? <PinOff className="w-3.5 h-3.5 flex-shrink-0" /> : <Pin className="w-3.5 h-3.5 flex-shrink-0" />}
-            <span className="hidden sm:inline">{post.isPinned ? 'برداشتن پین' : 'پین'}</span>
+          <button
+            onClick={handlePin}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#D97706', background: '#FEF3C7', border: 'none', cursor: 'pointer', padding: '5px 10px', borderRadius: 8 }}
+          >
+            {post.isPinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
+            <span>{post.isPinned ? 'برداشتن پین' : 'پین'}</span>
           </button>
-          <button onClick={() => setEditing(true)}
-            className="flex items-center gap-1.5 text-xs text-primary-600 bg-primary-50 hover:bg-primary-100 px-2.5 py-1.5 rounded-lg transition-colors">
-            <Pencil className="w-3.5 h-3.5 flex-shrink-0" />
-            <span className="hidden sm:inline">ویرایش</span>
+          <button
+            onClick={() => setEditing(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#0ABDE3', background: '#E0F7FD', border: 'none', cursor: 'pointer', padding: '5px 10px', borderRadius: 8 }}
+          >
+            <Pencil className="w-3.5 h-3.5" /> ویرایش
           </button>
-          <button onClick={handleDelete}
-            className="flex items-center gap-1.5 text-xs text-red-500 bg-red-50 hover:bg-red-100 px-2.5 py-1.5 rounded-lg transition-colors">
-            <Trash2 className="w-3.5 h-3.5 flex-shrink-0" />
-            <span className="hidden sm:inline">حذف</span>
+          <button
+            onClick={handleDelete}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#EF4444', background: '#FEE2E2', border: 'none', cursor: 'pointer', padding: '5px 10px', borderRadius: 8 }}
+          >
+            <Trash2 className="w-3.5 h-3.5" /> حذف
           </button>
         </div>
       </div>
 
-      {/* Full post */}
-      <NewsletterPostCard post={post} isAdmin />
+      {/* ── Scrollable content (goes under floating nav) ── */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', paddingBottom: 'calc(96px + env(safe-area-inset-bottom))' }}>
+        <NewsletterPostCard post={post} isAdmin />
+      </div>
 
       {showSeen && <SeenModal postId={post.id} totalSeen={post.seenCount} onClose={() => setShowSeen(false)} />}
 

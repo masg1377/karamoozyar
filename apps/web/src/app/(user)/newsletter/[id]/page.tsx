@@ -9,7 +9,6 @@ import type { NewsletterPostDto } from '@karamooziyar/shared';
 import { NewsletterPostCard } from '@/components/newsletter/NewsletterPost';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
 import { useNewsletterStore } from '@/store/newsletter.store';
-import { ArrowRight } from 'lucide-react';
 
 export default function NewsletterDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -33,13 +32,10 @@ export default function NewsletterDetailPage() {
     void fetchPost();
   }, [id]);
 
-  // Mark seen
   useEffect(() => {
     if (!post) return;
     const socket = getSocket();
     socket.emit(SOCKET_EVENTS.NEWSLETTER_SEEN, { postId: post.id });
-
-    // Live reaction updates
     const onReactionUpdated = (data: { postId: string; reactions: Record<string, number> }) => {
       if (data.postId === post.id) {
         setPost((prev) => prev ? { ...prev, reactionSummary: data.reactions } : prev);
@@ -50,33 +46,44 @@ export default function NewsletterDetailPage() {
     return () => { socket.off(SOCKET_EVENTS.NEWSLETTER_REACTION_UPDATED, onReactionUpdated); };
   }, [post, updatePost]);
 
-  if (loading) return (
-    <div className="h-64 flex items-center justify-center">
-      <LoadingSpinner size="lg" label="در حال بارگذاری..." />
-    </div>
-  );
+  if (loading) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <LoadingSpinner size="lg" label="در حال بارگذاری..." />
+      </div>
+    );
+  }
 
-  if (notFound || !post) return (
-    <div className="p-4 text-center py-16">
-      <p className="text-gray-400 text-sm">اطلاعیه پیدا نشد</p>
-      <button onClick={() => router.back()} className="mt-3 text-sm text-primary-600">
-        برگشت
-      </button>
-    </div>
-  );
+  if (notFound || !post) {
+    return (
+      <div className="p-4 text-center py-16">
+        <p className="text-gray-400 text-sm">اطلاعیه پیدا نشد</p>
+        <button onClick={() => router.back()} className="mt-3 text-sm" style={{ color: '#0ABDE3' }}>
+          برگشت
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <div className="h-full overflow-y-auto p-4 space-y-4 animate-fade-in">
-      {/* Back button */}
-      <button
-        onClick={() => router.back()}
-        className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 transition-colors"
-      >
-        <ArrowRight className="w-4 h-4" />
-        <span>اطلاعیه‌ها</span>
-      </button>
+    <div className="h-full overflow-y-auto">
+      <div className="max-w-xl mx-auto p-4 pb-6 space-y-4 animate-fade-in">
+        {/* Back */}
+        <button
+          onClick={() => router.back()}
+          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+          اطلاعیه‌ها
+        </button>
 
-      <NewsletterPostCard post={post} />
+        {/* Post card with white bg */}
+        <div className="bg-white rounded-3xl border border-blue-50 shadow-sm overflow-hidden">
+          <NewsletterPostCard post={post} />
+        </div>
+      </div>
     </div>
   );
 }

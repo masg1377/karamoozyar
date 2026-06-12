@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import api from '@/lib/api-client';
 import { getAttachmentSignedUrl } from '@/lib/attachment';
 import { FILE_LIMITS } from '@karamooziyar/shared';
@@ -86,10 +87,12 @@ function PreviewModal({
   hashtags: string[];
   onClose: () => void;
 }) {
-  return (
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
     <>
-      <div className="fixed inset-0 bg-black/50 z-50" onClick={onClose} />
-      <div className="fixed inset-x-4 top-8 bottom-8 z-50 bg-gray-50 rounded-2xl shadow-2xl max-w-lg mx-auto overflow-hidden flex flex-col">
+      <div className="fixed inset-0 bg-black/50 z-[210]" onClick={onClose} />
+      <div className="fixed inset-x-4 top-8 bottom-8 z-[210] bg-gray-50 rounded-2xl shadow-2xl max-w-lg mx-auto overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-100 flex-shrink-0">
           <p className="font-semibold text-gray-800 text-sm">پیش‌نمایش</p>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100">
@@ -118,7 +121,8 @@ function PreviewModal({
           </div>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 
@@ -434,10 +438,12 @@ export function NewsletterComposer({
     }
   };
 
-  return (
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
     <>
-      <div className="fixed inset-0 bg-black/40 z-40" onClick={onClose} />
-      <div className="fixed inset-x-4 top-6 bottom-6 z-40 bg-white rounded-2xl shadow-2xl max-w-2xl mx-auto flex flex-col overflow-hidden">
+      <div className="fixed inset-0 bg-black/40 z-[200]" onClick={onClose} />
+      <div className="fixed inset-x-4 top-6 bottom-6 z-[200] bg-white rounded-2xl shadow-2xl max-w-lg mx-auto flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
           <p className="font-bold text-gray-800">{editingPost ? 'ویرایش پست' : 'پست جدید'}</p>
           <div className="flex items-center gap-2">
@@ -533,6 +539,7 @@ export function NewsletterComposer({
       {showPreview && (
         <PreviewModal blocks={blocks} bannerBlock={bannerBlock} title={title} hashtags={hashtags} onClose={() => setShowPreview(false)} />
       )}
-    </>
+    </>,
+    document.body,
   );
 }

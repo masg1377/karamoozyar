@@ -162,10 +162,10 @@ export default function AdminConversationPage() {
   const traineeAvatar = conv?.user.avatarUrl ?? null;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-6rem)] -m-4 lg:-m-6 bg-gray-50">
+    <div className="h-full flex flex-col overflow-hidden">
 
-      {/* Header */}
-      <div className="bg-white border-b border-gray-100 px-4 py-3 flex items-center gap-3 shadow-sm flex-shrink-0">
+      {/* ── Chat header ── */}
+      <div className="flex-shrink-0 bg-white/90 backdrop-blur-md border-b border-blue-100/60 px-4 py-3 flex items-center gap-3">
         <button onClick={() => router.back()} className="p-2 rounded-xl hover:bg-gray-100 transition-colors text-gray-500 flex-shrink-0">
           <ArrowRight className="w-5 h-5" />
         </button>
@@ -175,8 +175,10 @@ export default function AdminConversationPage() {
           <div className="w-9 h-9 bg-primary-100 rounded-full flex-shrink-0" />
         )}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-800 truncate">{userName}</p>
-          {isUserTyping && <p className="text-xs text-green-500 animate-pulse">در حال تایپ...</p>}
+          <p className="text-sm font-bold text-gray-800 truncate">{userName}</p>
+          <p className="text-xs text-green-500 font-medium">
+            {isUserTyping ? 'در حال تایپ...' : 'آنلاین'}
+          </p>
         </div>
       </div>
 
@@ -189,7 +191,7 @@ export default function AdminConversationPage() {
       />
 
       {/* Messages */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-2" onScroll={handleScroll}>
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5" style={{ background: 'linear-gradient(180deg, #D4EDFB 0%, #EBF5FF 50%, #F2F8FF 100%)' }} onScroll={handleScroll}>
         {canLoadMore && (
           <button
             onClick={() => { if (scrollContainerRef.current) prevScrollHeightRef.current = scrollContainerRef.current.scrollHeight; void loadMore(); }}
@@ -245,7 +247,7 @@ export default function AdminConversationPage() {
       </div>
 
       {/* Input */}
-      <div className="flex-shrink-0">
+      <div className="flex-shrink-0 bg-white/90 backdrop-blur-md border-t border-blue-100/60">
         <MessageInput
           conversationId={conversationId}
           editingMessage={editingMessage}

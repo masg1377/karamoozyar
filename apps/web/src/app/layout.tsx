@@ -45,8 +45,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           type="text/css"
         />
       </head>
-      <body className="font-sans antialiased" style={{ fontFamily: 'Vazirmatn, Tahoma, sans-serif' }}>
-        {children}
+      <body
+        className="font-sans antialiased"
+        style={{ fontFamily: 'Vazirmatn, Tahoma, sans-serif', background: '#cbd5e1' }}
+      >
+        <div
+          className="relative mx-auto overflow-hidden"
+          style={{ maxWidth: 500, minHeight: '100dvh' }}
+        >
+          {children}
+        </div>
         <Toaster
           position="top-center"
           richColors

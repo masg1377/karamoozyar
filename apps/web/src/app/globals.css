@@ -5,26 +5,26 @@
 /* ─── CSS Variables ─────────────────────────────────────── */
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 204 80% 97%;     /* #EDF7FF - آبی خیلی کم‌رنگ */
+    --foreground: 215 40% 15%;     /* dark navy */
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 215 40% 15%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 214 64% 28%;       /* #1B4F72 */
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --popover-foreground: 215 40% 15%;
+    --primary: 197 85% 46%;        /* #0ABDE3 - cyan-blue روشن */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 204 70% 94%;
+    --secondary-foreground: 215 40% 20%;
+    --muted: 204 60% 95%;
+    --muted-foreground: 215 20% 50%;
+    --accent: 204 70% 94%;
+    --accent-foreground: 215 40% 20%;
     --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 214 64% 28%;
-    --radius: 0.5rem;
+    --destructive-foreground: 0 0% 100%;
+    --border: 204 50% 88%;
+    --input: 204 50% 88%;
+    --ring: 197 85% 46%;
+    --radius: 0.75rem;
   }
 }
 
@@ -44,32 +44,36 @@
     text-rendering: optimizeLegibility;
   }
 
-  /* Scrollbar */
+  /* Scrollbar — hidden globally for native app feel */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 0;
+    height: 0;
+    display: none;
   }
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  ::-webkit-scrollbar-thumb {
-    @apply bg-gray-300 rounded-full;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    @apply bg-gray-400;
+  * {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
 }
 
 /* ─── Chat Bubbles ────────────────────────────────────────── */
 @layer components {
   .bubble-sent {
-    @apply bg-primary-600 text-white rounded-2xl rounded-bl-sm shadow-sm;
+    background: linear-gradient(135deg, #0ABDE3 0%, #0097B2 100%);
+    /* Tail on bottom-right (screen-edge side for right-aligned sent bubbles in RTL) */
+    @apply text-white rounded-2xl rounded-br-sm shadow-sm;
   }
   .bubble-received {
-    @apply bg-white text-gray-800 rounded-2xl rounded-br-sm shadow-sm border border-gray-100;
+    /* Tail on bottom-left (screen-edge side for left-aligned received bubbles in RTL) */
+    @apply bg-white text-gray-800 rounded-2xl rounded-bl-sm shadow-sm border border-blue-50;
   }
   .bubble-deleted {
-    @apply bg-gray-100 text-gray-400 italic rounded-2xl shadow-sm border border-gray-200;
+    @apply bg-blue-50 text-gray-400 italic rounded-2xl shadow-sm border border-blue-100;
+  }
+
+  /* ─── App card style ─── */
+  .app-card {
+    @apply bg-white rounded-2xl shadow-sm border border-blue-50/80;
   }
 }
 

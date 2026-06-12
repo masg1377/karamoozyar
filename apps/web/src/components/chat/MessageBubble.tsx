@@ -264,21 +264,22 @@ export function MessageBubble({
           justify-start = packs items to the RIGHT (RTL main-start)
           justify-end   = packs items to the LEFT  (RTL main-end)
 
-        Sent messages (isMine=true):  LEFT side  → justify-end
-        Received messages (!isMine):  RIGHT side → justify-start
+        Sent messages (isMine=true):  RIGHT side → justify-start
+        Received messages (!isMine):  LEFT side  → justify-end
 
-        Avatar is adjacent to the bubble because the wrapper has NO flex-1.
-        It is only as wide as the bubble (max 75% of row).
-        Avatar + wrapper are packed together on the same side.
+        Avatar for received is placed AFTER wrapper in DOM so it appears on the
+        outer-LEFT edge (screen edge side) in RTL flex-end layout.
         ────────────────────────────────────────────────────────────────────────
       */}
       <div className={cn(
         'flex items-end gap-1.5',
-        isMine ? 'justify-end' : 'justify-start',
+        // RTL: justify-start = RIGHT side, justify-end = LEFT side
+        // Sent (mine) → RIGHT; Received → LEFT
+        isMine ? 'justify-start' : 'justify-end',
       )}>
 
-        {/* Avatar for received messages (non-mine): appears adjacent to bubble */}
-        {!isMine && showAvatar && avatarEl}
+        {/* Avatar for sent messages shown first (visual RIGHT in RTL justify-start) — not currently used */}
+        {isMine && showAvatar && avatarEl}
 
         {/*
           Swipe wrapper: position:relative for reply icon + drag transform.
@@ -294,9 +295,9 @@ export function MessageBubble({
             className={cn(
               'absolute top-1/2 -translate-y-1/2 z-10 pointer-events-none',
               'w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center shadow-md',
-              // isMine messages are on the LEFT → drag RIGHT → icon appears to the RIGHT of bubble
-              // non-mine messages are on the RIGHT → drag LEFT → icon appears to the LEFT of bubble
-              isMine ? '-right-10' : '-left-10',
+              // isMine messages are on the RIGHT (RTL) → drag LEFT → icon on LEFT of bubble
+              // non-mine messages are on the LEFT (RTL) → drag RIGHT → icon on RIGHT of bubble
+              isMine ? '-left-10' : '-right-10',
             )}
             style={{ opacity: 0, transform: 'scale(0.5)', transition: 'none' }}
           >
@@ -356,8 +357,8 @@ export function MessageBubble({
           </div>
         </div>
 
-        {/* Avatar for sent messages (mine): appears adjacent to bubble */}
-        {isMine && showAvatar && avatarEl}
+        {/* Avatar for received messages (non-mine): appears AFTER wrapper = LEFT side in RTL justify-end */}
+        {!isMine && showAvatar && avatarEl}
       </div>
 
       {/* Context menu portal — always on top, z-9999, escapes scroll containers */}

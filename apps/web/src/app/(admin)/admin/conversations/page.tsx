@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import api from '@/lib/api-client';
@@ -92,13 +93,14 @@ function NewChatModal({ onClose, onStartChat }: {
     }
   };
 
-  return (
+  if (typeof document === 'undefined') return null;
+  return createPortal(
     <>
       {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/40 z-50" onClick={onClose} />
+      <div className="fixed inset-0 bg-black/40 z-[200]" onClick={onClose} />
 
       {/* Modal — fixed height, flex column so search stays sticky */}
-      <div className="fixed inset-x-4 top-[10vh] z-50 bg-white rounded-2xl shadow-2xl max-w-md mx-auto flex flex-col"
+      <div className="fixed inset-x-4 top-[10vh] z-[200] bg-white rounded-2xl shadow-2xl max-w-md mx-auto flex flex-col"
         style={{ height: 'min(80vh, 600px)' }}>
 
         {/* ── Header (sticky) ─────────────────────────────────────────── */}
@@ -200,7 +202,8 @@ function NewChatModal({ onClose, onStartChat }: {
           )}
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 
@@ -285,33 +288,35 @@ export default function AdminConversationsPage() {
 
   return (
     <>
-      <div className="max-w-3xl mx-auto space-y-4 animate-fade-in">
+      <div style={{ height: '100%', overflowY: 'auto' }}>
+      <div style={{ padding: '16px 16px calc(96px + env(safe-area-inset-bottom))', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {/* Header */}
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-800">گفتگوها</h1>
-            {totalUnread > 0 && (
-              <p className="text-sm text-red-500 mt-0.5">{totalUnread} پیام نخوانده</p>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 bg-gray-100 rounded-2xl px-3 py-1.5 w-48">
-              <Search className="w-4 h-4 text-gray-400 flex-shrink-0" />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => handleSearch(e.target.value)}
-                placeholder="جستجو..."
-                className="bg-transparent text-sm text-gray-700 placeholder:text-gray-400 outline-none w-full"
-              />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <h1 style={{ fontSize: 16, fontWeight: 700, color: '#1e293b', margin: 0 }}>گفتگوها</h1>
+              {totalUnread > 0 && (
+                <p style={{ fontSize: 12, color: '#EF4444', margin: '3px 0 0' }}>{totalUnread} پیام نخوانده</p>
+              )}
             </div>
             <button
               onClick={() => setShowNewChat(true)}
-              className="flex items-center gap-1.5 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium px-3.5 py-2 rounded-2xl transition-colors flex-shrink-0"
+              style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'linear-gradient(135deg, #0ABDE3, #0897B8)', color: 'white', fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 14, border: 'none', cursor: 'pointer' }}
             >
               <Plus className="w-4 h-4" />
               گفتگو جدید
             </button>
+          </div>
+          {/* Search */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'white', borderRadius: 14, padding: '8px 12px', border: '1px solid rgba(0,0,0,0.06)', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' }}>
+            <Search className="w-4 h-4 text-gray-400 flex-shrink-0" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => handleSearch(e.target.value)}
+              placeholder="جستجو بر اساس نام..."
+              style={{ background: 'transparent', fontSize: 13, color: '#374151', outline: 'none', width: '100%', border: 'none' }}
+            />
           </div>
         </div>
 
@@ -381,6 +386,7 @@ export default function AdminConversationsPage() {
             {total} گفتگو
           </p>
         )}
+      </div>
       </div>
 
       {/* New Chat Modal */}
