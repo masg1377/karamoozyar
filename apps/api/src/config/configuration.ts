@@ -54,6 +54,14 @@ export interface AppConfig {
     privateKey: string;
     subject: string;
   };
+  storage: {
+    /** 'local' = ذخیره روی دیسک کنار پروژه | 's3' = MinIO/S3 */
+    driver: 'local' | 's3';
+    /** پوشه آپلود در حالت local (نسبی به cwd یا مسیر مطلق) */
+    localDir: string;
+    /** آدرس عمومی API برای ساخت لینک فایل‌های لوکال */
+    publicBaseUrl: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -95,6 +103,13 @@ export default (): AppConfig => ({
   throttle: {
     ttl: parseInt(process.env['THROTTLE_TTL'] ?? '60000', 10),
     limit: parseInt(process.env['THROTTLE_LIMIT'] ?? '100', 10),
+  },
+  storage: {
+    driver: (process.env['STORAGE_DRIVER'] === 'local' ? 'local' : 's3') as 'local' | 's3',
+    localDir: process.env['UPLOAD_DIR'] ?? 'uploads',
+    publicBaseUrl:
+      process.env['API_PUBLIC_URL'] ??
+      `http://localhost:${process.env['PORT'] ?? '3001'}`,
   },
   // Web Push (VAPID, self-hosted) — dev fallback keys; override in production
   push: {

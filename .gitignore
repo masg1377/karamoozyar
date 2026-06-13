@@ -53,3 +53,7 @@ coverage
 
 # pnpm probe leftovers (safe to delete)
 _tmp_*
+
+# local upload storage
+apps/api/uploads/
+uploads/
