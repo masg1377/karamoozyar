@@ -150,7 +150,7 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
       dir="rtl"
       style={{
         position: 'relative',
-        height: '100dvh',
+        height: '100%', // والد (app-shell) خودش 100dvh است
         overflow: 'hidden',
         background: 'linear-gradient(90deg, #4A88AA 0%, #72B8D5 60%, #D9F4FE 100%)',
       }}

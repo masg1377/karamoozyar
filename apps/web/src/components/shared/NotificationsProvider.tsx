@@ -15,6 +15,7 @@ import { useAuthStore } from '@/store/auth.store';
 import { useChatStore } from '@/store/chat.store';
 import { useNotificationStore } from '@/store/notification.store';
 import { ensurePushSubscription } from '@/lib/push-client';
+import { EnablePushPrompt } from './EnablePushPrompt';
 
 interface NotificationsProviderProps {
   role: 'USER' | 'ADMIN';
@@ -164,5 +165,6 @@ export function NotificationsProvider({ role }: NotificationsProviderProps) {
 
   useSocketEvent<SocketNotificationPayload>(SOCKET_EVENTS.NOTIFICATION_NEW, handleNotification);
 
-  return null;
+  // شیت یک‌باره «فعال‌سازی اعلان‌ها» در اولین باز شدن اپ
+  return <EnablePushPrompt />;
 }

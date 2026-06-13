@@ -94,4 +94,24 @@ api.interceptors.response.use(
   },
 );
 
+/**
+ * رفرش دستی access token (برای socket-client) — موفق: توکن جدید، ناموفق: null.
+ * از همان endpoint رفرش REST استفاده می‌کند ولی مستقل از interceptor است.
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  const refreshToken = tokenStore.getRefresh();
+  if (!refreshToken) return null;
+  try {
+    const { data } = await axios.post<{ data: { accessToken: string } }>(
+      `${BASE_URL}/auth/refresh`,
+      { refreshToken },
+    );
+    const newToken = data.data.accessToken;
+    tokenStore.setAccess(newToken);
+    return newToken;
+  } catch {
+    return null;
+  }
+}
+
 export default api;

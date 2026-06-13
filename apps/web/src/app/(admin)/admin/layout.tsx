@@ -156,7 +156,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       dir="rtl"
       style={{
         position: 'relative',
-        height: '100dvh',
+        height: '100%', // والد (app-shell) خودش 100dvh است
         overflow: 'hidden',
         /* Figma gradient: rgba(28,39,76,0.69)→rgba(17,106,154,0.69)→rgba(204,240,254,0.69) over #f6fcff */
         background: 'linear-gradient(90deg, #4A88AA 0%, #72B8D5 60%, #D9F4FE 100%)',

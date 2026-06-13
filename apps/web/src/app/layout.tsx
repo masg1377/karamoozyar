@@ -3,6 +3,7 @@ import { Toaster } from 'sonner';
 import './globals.css';
 import 'react-multi-date-picker/styles/colors/teal.css';
 import { PwaInstallGate } from '@/components/shared/PwaInstallGate';
+import { IosViewportFix } from '@/components/shared/IosViewportFix';
 
 export const metadata: Metadata = {
   title: {
@@ -17,9 +18,14 @@ export const metadata: Metadata = {
     title: 'کارآموزیار',
   },
   icons: {
-    icon: '/icons/icon-192.png',
+    icon: [
+      { url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
     // آیکون iOS باید opaque باشد — نسخه مخصوص با پس‌زمینه سفید از logo.png
-    apple: '/icons/apple-touch-icon.png',
+    // sizes صریح، تا iOS موقع Add to Home Screen مطمئن برش دارد
+    apple: [{ url: '/icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+    shortcut: '/icons/icon-192.png',
   },
 };
 
@@ -51,10 +57,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         className="font-sans antialiased"
         style={{ fontFamily: 'Vazirmatn, Tahoma, sans-serif', background: '#cbd5e1' }}
       >
+        <IosViewportFix />
         <PwaInstallGate>
+          {/* height ثابت + اسکرول داخلی — body قفل است (app-shell)، پس
+              صفحاتی مثل لاگین داخل همین کانتینر اسکرول می‌شوند */}
           <div
-            className="relative mx-auto overflow-hidden"
-            style={{ maxWidth: 500, minHeight: '100dvh' }}
+            className="relative mx-auto"
+            style={{ maxWidth: 500, height: '100dvh', overflowY: 'auto', overflowX: 'hidden' }}
           >
             {children}
           </div>
