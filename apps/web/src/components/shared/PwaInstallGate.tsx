@@ -13,6 +13,11 @@ import logoSrc from '@/assets/logo.png';
 
 type Platform = 'ios' | 'android' | null;
 
+/** وقتی کاربر تأیید کند نصب کرده، گیت دیگر روی این دستگاه نمایش داده نمی‌شود.
+ *  (روی HTTP شورتکات اندروید در حالت standalone باز نمی‌شود و راه تشخیص
+ *  خودکار وجود ندارد — این تأیید دستی جایگزین آن است) */
+const GATE_DONE_KEY = 'pwa_install_gate_done';
+
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
@@ -117,7 +122,8 @@ export function PwaInstallGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const p = detectPlatform();
-    if (p && !isStandalone()) {
+    const alreadyConfirmed = localStorage.getItem(GATE_DONE_KEY) === '1';
+    if (p && !isStandalone() && !alreadyConfirmed) {
       setPlatform(p);
       setShow(true);
     }
@@ -126,7 +132,10 @@ export function PwaInstallGate({ children }: { children: React.ReactNode }) {
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
     };
-    const onInstalled = () => setInstalled(true);
+    const onInstalled = () => {
+      setInstalled(true);
+      localStorage.setItem(GATE_DONE_KEY, '1'); // در تب مرورگر هم دیگر گیت نیاید
+    };
 
     window.addEventListener('beforeinstallprompt', onBip);
     window.addEventListener('appinstalled', onInstalled);
@@ -255,6 +264,29 @@ export function PwaInstallGate({ children }: { children: React.ReactNode }) {
       <p style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 20, textAlign: 'center', lineHeight: 1.9 }}>
         پس از نصب، اپلیکیشن به‌صورت تمام‌صفحه و با اعلان‌های لحظه‌ای در اختیار شما خواهد بود.
       </p>
+
+      {/* تأیید دستی نصب — مخصوص حالتی که تشخیص خودکار ممکن نیست (مثلاً HTTP در اندروید) */}
+      <button
+        onClick={() => {
+          localStorage.setItem(GATE_DONE_KEY, '1');
+          setShow(false);
+        }}
+        style={{
+          marginTop: 14,
+          background: 'none',
+          border: 'none',
+          color: '#0779A0',
+          fontSize: 12.5,
+          fontWeight: 600,
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          padding: '8px 12px',
+          textDecoration: 'underline',
+          textUnderlineOffset: 4,
+        }}
+      >
+        اپ را اضافه کرده‌ام — دیگر نشان نده
+      </button>
     </div>
   );
 }
