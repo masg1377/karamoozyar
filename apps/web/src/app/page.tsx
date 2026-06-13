@@ -34,7 +34,7 @@ export default function SplashPage() {
     <div
       dir="rtl"
       style={{
-        height: '100dvh',
+        height: '100%', // والد (app-shell) فول‌اسکرین است — dvh در iOS PWA باگ دارد
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',

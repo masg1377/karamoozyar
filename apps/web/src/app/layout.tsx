@@ -59,11 +59,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       >
         <IosViewportFix />
         <PwaInstallGate>
-          {/* height ثابت + اسکرول داخلی — body قفل است (app-shell)، پس
-              صفحاتی مثل لاگین داخل همین کانتینر اسکرول می‌شوند */}
+          {/* height: 100% (نه 100dvh) — body با position:fixed + inset:0 دقیقاً
+              هم‌اندازه صفحه است؛ dvh در PWA های iOS باگ دارد و گاهی کوچک‌تر
+              از صفحه محاسبه می‌شود → گپ خاکستری پایین. 100% همیشه دقیق است. */}
           <div
             className="relative mx-auto"
-            style={{ maxWidth: 500, height: '100dvh', overflowY: 'auto', overflowX: 'hidden' }}
+            style={{ maxWidth: 500, height: '100%', overflowY: 'auto', overflowX: 'hidden' }}
           >
             {children}
           </div>
