@@ -1,13 +1,18 @@
 'use client';
 
 import { createPortal } from 'react-dom';
-import { X, User, BookmarkCheck, Headphones, LogOut } from 'lucide-react';
+import { X, User, LogOut } from 'lucide-react';
+// import { BookmarkCheck, Headphones } from 'lucide-react'; // ← برای «فایل‌های ذخیره‌شده» و «پشتیبانی» (فعلاً غیرفعال)
 
 interface ProfileSheetProps {
   firstName: string;
   lastName: string;
   expertiseField: string;
   initial: string;
+  /** برچسب نقش زیر نام (پیش‌فرض: «کارآموز» یا رشته تخصصی) */
+  roleLabel?: string;
+  /** نمایش آیتم‌های «فایل‌های ذخیره‌شده» و «پشتیبانی» — برای ادمین false */
+  showExtras?: boolean;
   onClose: () => void;
   onEditProfile: () => void;
   onLogout: () => void;
@@ -18,6 +23,7 @@ export function ProfileSheet({
   lastName,
   expertiseField,
   initial,
+  roleLabel,
   onClose,
   onEditProfile,
   onLogout,
@@ -139,7 +145,7 @@ export function ProfileSheet({
                   {firstName} {lastName}
                 </p>
                 <p style={{ fontSize: 11, color: 'rgba(28,39,76,0.65)', margin: '2px 0 0' }}>
-                  {expertiseField || 'کارآموز'}
+                  {roleLabel ?? (expertiseField || 'کارآموز')}
                 </p>
               </div>
             </div>
@@ -178,6 +184,7 @@ export function ProfileSheet({
               'ویرایش پروفایل',
               () => { onClose(); setTimeout(onEditProfile, 200); },
             )}
+            {/* «فایل‌های ذخیره‌شده» و «پشتیبانی» — فعلاً غیرفعال؛ برای فعال‌سازی از کامنت خارج کنید
             {menuItem(
               <BookmarkCheck style={{ width: 14, height: 14, color: '#4A88AA' }} />,
               'فایل‌های ذخیره‌شده',
@@ -192,6 +199,7 @@ export function ProfileSheet({
               false,
               true,
             )}
+            */}
             {menuItem(
               <LogOut style={{ width: 14, height: 14, color: '#EF4444' }} />,
               'خروج از حساب کاربری',

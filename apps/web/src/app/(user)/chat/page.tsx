@@ -85,6 +85,15 @@ export default function UserChatPage() {
     }
   }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // سین خودکار — تا وقتی داخل صفحه چت هستیم، هر پیام تازه‌رسیده بلافاصله seen شود
+  // (سرور بعدش unreadByUser را صفر و conversation:updated را emit می‌کند → badge/نوتیف پاک می‌شود)
+  useEffect(() => {
+    if (!conversationId || messages.length === 0) return;
+    const socket = getSocket();
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg) socket.emit(SOCKET_EVENTS.CHAT_SEEN, { conversationId, messageId: lastMsg.id });
+  }, [conversationId, messages]);
+
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;

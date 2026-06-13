@@ -50,3 +50,6 @@ coverage
 
 # misc
 *.tsbuildinfo
+
+# pnpm probe leftovers (safe to delete)
+_tmp_*

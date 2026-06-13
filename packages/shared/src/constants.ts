@@ -86,6 +86,8 @@ export const SOCKET_EVENTS = {
 
   NOTIFICATION_UNREAD: 'notification:unread',
   NOTIFICATION_BADGE: 'notification:badge',
+  // اعلان درون‌برنامه‌ای — به روم شخصی گیرنده (یا روم ادمین) ارسال می‌شود
+  NOTIFICATION_NEW: 'notification:new',
 } as const;
 
 export const SOCKET_ROOMS = {

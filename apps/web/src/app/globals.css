@@ -37,11 +37,15 @@
   html {
     direction: rtl;
     font-size: 15px;
+    /* رنگ پشت ناچ/استاتوس‌بار — هم‌رنگ بالای گرادیان اپ تا ناچ کامل پوشش داده شود */
+    background-color: #4a88aa;
   }
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
     text-rendering: optimizeLegibility;
+    /* جلوگیری از rubber-band overscroll که پشت ناچ را لو می‌دهد */
+    overscroll-behavior-y: none;
   }
 
   /* Scrollbar — hidden globally for native app feel */
@@ -114,4 +118,14 @@
 /* Smooth momentum scroll on iOS */
 .overflow-y-auto, .overflow-y-scroll {
   -webkit-overflow-scrolling: touch;
+}
+
+/* ─── Safe Area (notch) ───────────────────────────────────── */
+/* توست‌ها هرگز زیر ناچ نروند — sonner در موبایل از --mobile-offset استفاده
+   می‌کند و prop offset را نادیده می‌گیرد؛ این override هر دو حالت را پوشش می‌دهد */
+[data-sonner-toaster][data-y-position='top'] {
+  top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+}
+[data-sonner-toaster][data-y-position='bottom'] {
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px) !important;
 }

@@ -26,9 +26,11 @@ import {
   type SocketDeletePayload,
   type SocketNewsletterReactPayload,
   type SocketNewsletterSeenPayload,
+  type SocketNotificationPayload,
   ReactionEmoji,
 } from '@karamooziyar/shared';
 import { WsJwtGuard } from '../modules/auth/guards/ws-jwt.guard';
+import { PushService } from '../modules/push/push.service';
 import { ConversationsService } from '../modules/conversations/conversations.service';
 import { NewsletterService } from '../modules/newsletter/newsletter.service';
 import { UploadsService } from '../modules/uploads/uploads.service';
@@ -55,9 +57,14 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
+    private readonly pushService: PushService,
   ) {}
 
   afterInit(): void {
+    // Bridge: lets non-gateway modules (e.g. newsletter REST) emit socket events
+    this.pushService.registerSocketEmitter((room, event, payload) => {
+      this.server.to(room).emit(event, payload);
+    });
     this.logger.log('WebSocket Gateway initialized');
   }
 
@@ -184,6 +191,43 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         ? await this.conversationsService.findForUser(senderId)
         : await this.conversationsService.findOneById(payload.conversationId);
       this.server.to(SOCKET_ROOMS.admin()).emit(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, conv);
+
+      // ── Notify the receiving side (in-app + web push) ──────────────────────
+      const preview = this.messagePreview(payload.type, payload.body);
+      const createdAt = new Date().toISOString();
+
+      if (role === 'USER') {
+        // Trainee → all admins
+        const href = `/admin/conversations/${payload.conversationId}`;
+        this.server.to(SOCKET_ROOMS.admin()).emit(SOCKET_EVENTS.NOTIFICATION_NEW, {
+          type: 'message',
+          title: message.senderName,
+          body: preview,
+          href,
+          conversationId: payload.conversationId,
+          createdAt,
+        } satisfies SocketNotificationPayload);
+        void this.pushService
+          .sendToAdmins({ title: message.senderName, body: preview, url: href, tag: `conv-${payload.conversationId}` })
+          .catch((err) => this.logger.warn(`Push to admins failed: ${String(err)}`));
+      } else {
+        // Admin → the conversation's trainee
+        const recipientId = 'user' in conv ? conv.user.id : conv.userId;
+        const userRoom = SOCKET_ROOMS.user(recipientId);
+        // Keep the trainee's conversation badge in sync app-wide
+        this.server.to(userRoom).emit(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, conv);
+        this.server.to(userRoom).emit(SOCKET_EVENTS.NOTIFICATION_NEW, {
+          type: 'message',
+          title: 'مدیریت مرکز',
+          body: preview,
+          href: '/chat',
+          conversationId: payload.conversationId,
+          createdAt,
+        } satisfies SocketNotificationPayload);
+        void this.pushService
+          .sendToUser(recipientId, { title: 'مدیریت مرکز', body: preview, url: '/chat', tag: `conv-${payload.conversationId}` })
+          .catch((err) => this.logger.warn(`Push to user failed: ${String(err)}`));
+      }
     } catch (err) {
       client.emit(SOCKET_EVENTS.CHAT_ERROR, { message: (err as Error).message });
     }
@@ -242,6 +286,23 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       userId: client.user.sub,
       seenAt: result.seenAt,
     });
+
+    // همگام‌سازی badge خوانده‌نشده در کل اپ — شمارنده‌ی سمتِ خواننده را صفر کن و خبر بده
+    try {
+      await this.conversationsService.markMessagesAsRead(
+        payload.conversationId,
+        client.user.sub,
+        client.user.role,
+      );
+      const conv = await this.conversationsService.findOneById(payload.conversationId);
+      if (client.user.role === 'ADMIN') {
+        this.server.to(SOCKET_ROOMS.admin()).emit(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, conv);
+      } else {
+        this.server
+          .to(SOCKET_ROOMS.user(client.user.sub))
+          .emit(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, conv);
+      }
+    } catch { /* non-critical */ }
   }
 
   @SubscribeMessage(SOCKET_EVENTS.CHAT_EDIT)
@@ -390,6 +451,22 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.server
       .to(SOCKET_ROOMS.newsletter())
       .emit(SOCKET_EVENTS.NEWSLETTER_POST_DELETED, { postId });
+  }
+
+  /** پیش‌نمایش کوتاه پیام برای اعلان‌ها */
+  private messagePreview(type: string, body?: string): string {
+    switch (type) {
+      case 'IMAGE':
+        return '📷 تصویر';
+      case 'VOICE':
+        return '🎤 پیام صوتی';
+      case 'FILE':
+        return '📎 فایل';
+      default: {
+        const text = body?.trim() ?? '';
+        return text.length > 90 ? `${text.slice(0, 90)}…` : text || 'پیام جدید';
+      }
+    }
   }
 
   private extractToken(client: Socket): string | null {

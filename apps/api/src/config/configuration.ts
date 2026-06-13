@@ -49,6 +49,11 @@ export interface AppConfig {
     ttl: number;
     limit: number;
   };
+  push: {
+    publicKey: string;
+    privateKey: string;
+    subject: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -69,7 +74,7 @@ export default (): AppConfig => ({
     accessSecret: process.env['JWT_ACCESS_SECRET'] ?? 'dev-access-secret',
     refreshSecret: process.env['JWT_REFRESH_SECRET'] ?? 'dev-refresh-secret',
     accessExpiresIn: (process.env['JWT_ACCESS_EXPIRES_IN'] ?? '15m') as MsDuration,
-    refreshExpiresIn: (process.env['JWT_REFRESH_EXPIRES_IN'] ?? '30d') as MsDuration,
+    refreshExpiresIn: (process.env['JWT_REFRESH_EXPIRES_IN'] ?? '90d') as MsDuration,
   },
   s3: {
     endpoint: process.env['S3_ENDPOINT'] ?? 'http://localhost:9000',
@@ -90,5 +95,13 @@ export default (): AppConfig => ({
   throttle: {
     ttl: parseInt(process.env['THROTTLE_TTL'] ?? '60000', 10),
     limit: parseInt(process.env['THROTTLE_LIMIT'] ?? '100', 10),
+  },
+  // Web Push (VAPID, self-hosted) — dev fallback keys; override in production
+  push: {
+    publicKey:
+      process.env['VAPID_PUBLIC_KEY'] ??
+      'BPuI5YBkuZCu0ouuzMxIs6RWVYI9zVjK9f4OORHqkni3UoDtS_A2WAsNCwsktcqM1ZTs99eBE5xuG_tNoM8XJvw',
+    privateKey: process.env['VAPID_PRIVATE_KEY'] ?? 'vGy6KNxXZg98iwXY6g5ai1_idunMHobxX2UfEdTQtYU',
+    subject: process.env['VAPID_SUBJECT'] ?? 'mailto:admin@karamooziyar.ir',
   },
 });

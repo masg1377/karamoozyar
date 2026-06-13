@@ -13,6 +13,7 @@ import { NewsletterModule } from './modules/newsletter/newsletter.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { PushModule } from './modules/push/push.module';
 import { ChatGateway } from './gateways/chat.gateway';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
@@ -42,6 +43,7 @@ import { RolesGuard } from './modules/auth/guards/roles.guard';
     UploadsModule,
     AdminModule,
     NotificationsModule,
+    PushModule,
   ],
   providers: [
     ChatGateway,

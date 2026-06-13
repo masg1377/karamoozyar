@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Toaster } from 'sonner';
 import './globals.css';
 import 'react-multi-date-picker/styles/colors/teal.css';
+import { PwaInstallGate } from '@/components/shared/PwaInstallGate';
 
 export const metadata: Metadata = {
   title: {
@@ -17,7 +18,8 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: '/icons/icon-192.png',
-    apple: '/icons/icon-192.png',
+    // آیکون iOS باید opaque باشد — نسخه مخصوص با پس‌زمینه سفید از logo.png
+    apple: '/icons/apple-touch-icon.png',
   },
 };
 
@@ -49,15 +51,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         className="font-sans antialiased"
         style={{ fontFamily: 'Vazirmatn, Tahoma, sans-serif', background: '#cbd5e1' }}
       >
-        <div
-          className="relative mx-auto overflow-hidden"
-          style={{ maxWidth: 500, minHeight: '100dvh' }}
-        >
-          {children}
-        </div>
+        <PwaInstallGate>
+          <div
+            className="relative mx-auto overflow-hidden"
+            style={{ maxWidth: 500, minHeight: '100dvh' }}
+          >
+            {children}
+          </div>
+        </PwaInstallGate>
         <Toaster
           position="top-center"
           richColors
+          offset="calc(env(safe-area-inset-top, 0px) + 12px)"
           toastOptions={{ style: { fontFamily: 'Vazirmatn, Tahoma, sans-serif', direction: 'rtl' } }}
         />
       </body>

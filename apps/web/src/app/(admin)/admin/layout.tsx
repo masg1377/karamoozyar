@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth.store';
@@ -10,6 +10,10 @@ import { toast } from 'sonner';
 import api from '@/lib/api-client';
 import { useChatStore } from '@/store/chat.store';
 import logoSrc from '@/assets/logo.png';
+import { ProfileSheet } from '@/components/profile/ProfileSheet';
+import { NotificationBell } from '@/components/shared/NotificationBell';
+import { NotificationsProvider } from '@/components/shared/NotificationsProvider';
+import { removePushSubscription } from '@/lib/push-client';
 
 const NAV_ITEMS = [
   {
@@ -102,23 +106,28 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }, [_hasHydrated, isAuthenticated, user, router]);
 
   // ─── ALL hooks must be before any early return ───────────────────────────────
-  // Measure actual nav pixel width so SVG path is never stretched
-  const navRef = useRef<HTMLElement>(null);
-  const [navWidth, setNavWidth] = useState(NAV_W);
+  const [showProfileSheet, setShowProfileSheet] = useState(false);
+  // Measure actual nav pixel width so SVG path is never stretched.
+  // Callback-ref pattern: fires whenever <nav> actually mounts — the layout
+  // returns null until hydration, so a mount-time useEffect would run too
+  // early (ref still null) and the nav would stay unmeasured until the next
+  // pathname change. navWidth=0 means "not measured yet" (SVG hidden).
+  const [navEl, setNavEl] = useState<HTMLElement | null>(null);
+  const [navWidth, setNavWidth] = useState(0);
   useEffect(() => {
-    const el = navRef.current;
-    if (!el) return;
-    setNavWidth(el.getBoundingClientRect().width);
+    if (!navEl) return;
+    setNavWidth(navEl.getBoundingClientRect().width);
     const ro = new ResizeObserver(([entry]) => {
       if (entry) setNavWidth(entry.contentRect.width);
     });
-    ro.observe(el);
+    ro.observe(navEl);
     return () => ro.disconnect();
-  }, [pathname]);
+  }, [navEl]);
 
   if (!_hasHydrated || !user) return null;
 
   const handleLogout = async () => {
+    await removePushSubscription(); // قبل از پاک شدن توکن — اشتراک پوش این دستگاه حذف شود
     try { await api.post('/auth/logout', { refreshToken: tokenStore.getRefresh() }); } catch { /* silent */ }
     tokenStore.clear();
     clearUser();
@@ -153,6 +162,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         background: 'linear-gradient(90deg, #4A88AA 0%, #72B8D5 60%, #D9F4FE 100%)',
       }}
     >
+      {/* ── اعلان‌های سراسری (toast + زنگوله + وب‌پوش) ── */}
+      <NotificationsProvider role="ADMIN" />
+
       {/* ── Header (transparent, sits over gradient bg) ── */}
       <header
         style={{
@@ -178,9 +190,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
           {/* Left: avatar → bell → name */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {/* Avatar → logout */}
+            {/* Avatar → پروفایل (مثل کارآموز) */}
             <button
-              onClick={handleLogout}
+              onClick={() => setShowProfileSheet(true)}
               style={{
                 width: 34, height: 34, borderRadius: '50%',
                 background: '#06ACE8',
@@ -192,23 +204,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               {initial}
             </button>
 
-            {/* Bell */}
-            <button
-              onClick={() => {}}
-              style={{ position: 'relative', background: 'none', border: 'none', padding: 4, cursor: 'pointer' }}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="#1c274c" strokeWidth={1.8} width={22} height={22}>
-                <path strokeLinecap="round" strokeLinejoin="round"
-                  d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-              </svg>
-              {totalUnread > 0 && (
-                <span style={{
-                  position: 'absolute', top: 2, right: 2,
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: '#EF4444', border: '1.5px solid white',
-                }} />
-              )}
-            </button>
+            {/* Bell — اعلان‌های درون‌برنامه‌ای */}
+            <NotificationBell extraDot={totalUnread > 0} />
 
             <span style={{ fontSize: 13, color: '#1c274c', fontWeight: 500 }}>مدیر سیستم</span>
           </div>
@@ -233,7 +230,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       {/* ── Floating pill nav ── */}
       {!hideNav && (
       <nav
-        ref={navRef}
+        ref={setNavEl}
         style={{
           position: 'absolute',
           bottom: 'calc(20px + env(safe-area-inset-bottom))',
@@ -244,7 +241,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           display: 'flex',
         }}
       >
-        {/* SVG background — viewBox matches actual pixel width so notch never distorts */}
+        {/* SVG background — rendered only after real width is measured (navWidth > 0)
+            so the notch shape is never drawn stretched/misaligned on first load */}
+        {navWidth > 0 && (
         <svg
           viewBox={`0 0 ${navWidth} ${NAV_H}`}
           aria-hidden="true"
@@ -258,9 +257,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         >
           <path d={buildNavPath(navWidth, notchCenter)} fill="#BDD8E2" />
         </svg>
+        )}
 
         {/* Active floating circle — positioned at actual SVG notch center */}
-        {activeNavIndex >= 0 && (
+        {navWidth > 0 && activeNavIndex >= 0 && (
           <div style={{
             position: 'absolute',
             top: -22,
@@ -332,6 +332,21 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           );
         })}
       </nav>
+      )}
+
+      {/* ── Profile sheet (مثل کارآموز — بدون پشتیبانی و فایل‌های ذخیره‌شده) ── */}
+      {showProfileSheet && (
+        <ProfileSheet
+          firstName={user.firstName}
+          lastName={user.lastName}
+          expertiseField=""
+          roleLabel="مدیر سیستم"
+          showExtras={false}
+          initial={initial}
+          onClose={() => setShowProfileSheet(false)}
+          onEditProfile={() => router.push('/admin/profile')}
+          onLogout={handleLogout}
+        />
       )}
     </div>
   );

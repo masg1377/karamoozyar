@@ -213,7 +213,7 @@ export class AuthService {
   private async saveRefreshToken(userId: string, rawToken: string, ipAddress?: string, userAgent?: string): Promise<void> {
     const tokenHash = await bcrypt.hash(rawToken, 8);
     const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30);
+    expiresAt.setDate(expiresAt.getDate() + 90); // هم‌راستا با JWT_REFRESH_EXPIRES_IN=90d
     await this.prisma.refreshToken.create({ data: { userId, tokenHash, ipAddress, userAgent, expiresAt } });
   }
 

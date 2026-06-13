@@ -84,7 +84,7 @@ export default function LoginPage() {
       tokenStore.setRefresh(tokens.refreshToken);
       setUser(user);
       reconnectSocket();
-      const maxAge = 7 * 24 * 60 * 60;
+      const maxAge = 90 * 24 * 60 * 60; // هم‌راستا با عمر ۹۰ روزه refresh token
       document.cookie = `auth_flag=true; path=/; SameSite=Lax; max-age=${maxAge}`;
       document.cookie = `user_role=${user.role}; path=/; SameSite=Lax; max-age=${maxAge}`;
       toast.success(`خوش آمدید، ${user.firstName} ${user.lastName}`);

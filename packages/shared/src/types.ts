@@ -225,3 +225,28 @@ export interface ApiError {
   message: string | string[];
   error?: string;
 }
+
+// ─── In-app / Push Notifications ─────────────────────────────────────────────
+
+export type AppNotificationType = 'message' | 'newsletter';
+
+/** Payload of SOCKET_EVENTS.NOTIFICATION_NEW — sent to recipient personal/admin room */
+export interface SocketNotificationPayload {
+  type: AppNotificationType;
+  title: string;
+  body: string;
+  /** Route to open when the notification is clicked (e.g. /chat or /admin/conversations/:id) */
+  href: string;
+  conversationId?: string;
+  postId?: string;
+  createdAt: string;
+}
+
+/** Browser PushSubscription JSON sent to the API for self-hosted web push */
+export interface PushSubscriptionDto {
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+}

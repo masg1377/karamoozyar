@@ -9,7 +9,12 @@ import type { NewsletterPostDto } from '@karamooziyar/shared';
 import { NewsletterPostCard } from '@/components/newsletter/NewsletterPost';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
 import { useNewsletterStore } from '@/store/newsletter.store';
+import { ArrowRight } from 'lucide-react';
 
+/**
+ * جزئیات اطلاعیه برای کارآموز — همان چیدمان صفحه ادمین،
+ * بدون ابزارهای ویرایش / حذف / پین / لیست بازدید (read-only + ری‌اکشن).
+ */
 export default function NewsletterDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -19,22 +24,16 @@ export default function NewsletterDetailPage() {
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
-    const fetchPost = async () => {
-      try {
-        const res = await api.get<{ data: NewsletterPostDto }>(`/newsletter/${id}`);
-        setPost(res.data.data);
-      } catch {
-        setNotFound(true);
-      } finally {
-        setLoading(false);
-      }
-    };
-    void fetchPost();
+    api.get<{ data: NewsletterPostDto }>(`/newsletter/${id}`)
+      .then((r) => setPost(r.data.data))
+      .catch(() => setNotFound(true))
+      .finally(() => setLoading(false));
   }, [id]);
 
   useEffect(() => {
     if (!post) return;
     const socket = getSocket();
+    // ثبت «دیده شد»
     socket.emit(SOCKET_EVENTS.NEWSLETTER_SEEN, { postId: post.id });
     const onReactionUpdated = (data: { postId: string; reactions: Record<string, number> }) => {
       if (data.postId === post.id) {
@@ -46,13 +45,11 @@ export default function NewsletterDetailPage() {
     return () => { socket.off(SOCKET_EVENTS.NEWSLETTER_REACTION_UPDATED, onReactionUpdated); };
   }, [post, updatePost]);
 
-  if (loading) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <LoadingSpinner size="lg" label="در حال بارگذاری..." />
-      </div>
-    );
-  }
+  if (loading) return (
+    <div className="h-64 flex items-center justify-center">
+      <LoadingSpinner size="lg" label="در حال بارگذاری..." />
+    </div>
+  );
 
   if (notFound || !post) {
     return (
@@ -66,23 +63,29 @@ export default function NewsletterDetailPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-xl mx-auto p-4 pb-6 space-y-4 animate-fade-in">
-        {/* Back */}
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+      {/* ── Sticky Toolbar (مثل ادمین — فقط دکمه بازگشت) ── */}
+      <div style={{
+        flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '10px 16px',
+        background: '#F6F7F9',
+        borderBottom: '1px solid rgba(0,0,0,0.06)',
+        zIndex: 5,
+      }}>
         <button
           onClick={() => router.back()}
-          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700"
+          style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', cursor: 'pointer', color: '#475569', fontSize: 13, padding: 0 }}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-          </svg>
-          اطلاعیه‌ها
+          <ArrowRight className="w-4 h-4" />
+          <span>اطلاعیه‌ها</span>
         </button>
+      </div>
 
-        {/* Post card with white bg */}
-        <div className="bg-white rounded-3xl border border-blue-50 shadow-sm overflow-hidden">
-          <NewsletterPostCard post={post} />
-        </div>
+      {/* ── Scrollable content ── */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', paddingBottom: 'calc(96px + env(safe-area-inset-bottom))' }}>
+        <NewsletterPostCard post={post} />
       </div>
     </div>
   );

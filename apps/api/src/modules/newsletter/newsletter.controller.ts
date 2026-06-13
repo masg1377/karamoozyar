@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { NewsletterService } from './newsletter.service';
+import { PushService } from '../push/push.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -32,7 +33,10 @@ import {
 @Controller('newsletter')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class NewsletterController {
-  constructor(private readonly newsletterService: NewsletterService) {}
+  constructor(
+    private readonly newsletterService: NewsletterService,
+    private readonly pushService: PushService,
+  ) {}
 
   @Get()
   findAll(
@@ -50,11 +54,14 @@ export class NewsletterController {
 
   @Post()
   @Roles(Role.ADMIN)
-  create(
+  async create(
     @Body(new ZodValidationPipe(CreateNewsletterPostSchema)) body: CreateNewsletterPostInput,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.newsletterService.create(user.sub, body);
+    const post = await this.newsletterService.create(user.sub, body);
+    // اعلان درون‌برنامه‌ای + وب‌پوش برای کارآموزان
+    this.pushService.notifyNewsletterPost({ id: post.id, title: post.title, body: post.body });
+    return post;
   }
 
   @Patch(':id')

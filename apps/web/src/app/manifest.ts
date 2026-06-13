@@ -13,8 +13,12 @@ export default function manifest(): MetadataRoute.Manifest {
     lang: 'fa',
     dir: 'rtl',
     icons: [
-      { src: '/logo.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
-      { src: '/logo.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      // آیکون‌های اصلی — از logo.png تولید شده‌اند (purpose: any)
+      { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      // نسخه maskable — لوگو داخل safe zone با پس‌زمینه سفید (اندروید آن را گرد/squircle برش می‌زند)
+      { src: '/icons/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+      { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
     categories: ['productivity', 'business'],
     shortcuts: [

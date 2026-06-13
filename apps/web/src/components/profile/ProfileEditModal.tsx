@@ -7,6 +7,10 @@ import { useAuthStore } from '@/store/auth.store';
 import { toast } from 'sonner';
 import { X, Save, Loader2, Camera } from 'lucide-react';
 import type { UserProfileDto } from '@karamooziyar/shared';
+import { Gender } from '@karamooziyar/shared';
+import { JalaliDatePicker } from '@/components/shared/JalaliDatePicker';
+import { SearchableSelect } from '@/components/shared/SearchableSelect';
+import { provinces, citiesByProvince } from '@/lib/iran-geo';
 
 const GENDER_OPTIONS = [
   { value: 'MALE', label: 'مرد' },
@@ -328,24 +332,37 @@ export function ProfileEditModal({ onClose }: ProfileEditModalProps) {
                 </div>
               </div>
 
-              <Field
-                label="تاریخ تولد"
-                value={form.birthDate}
-                onChange={(v) => set('birthDate', v)}
-                placeholder="مثال: 1370-05-15"
-              />
-
-              {/* Row: province / city */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <Field
-                  label="استان محل سکونت"
-                  value={form.residenceProvince}
-                  onChange={(v) => set('residenceProvince', v)}
+              {/* تاریخ تولد — تقویم شمسی */}
+              <div>
+                <label style={labelStyle}>تاریخ تولد (شمسی)</label>
+                <JalaliDatePicker
+                  value={form.birthDate}
+                  onChange={(v) => set('birthDate', v)}
                 />
-                <Field
-                  label="شهر محل سکونت"
+              </div>
+
+              {/* استان / شهر — سلکت با جستجو */}
+              <div>
+                <label style={labelStyle}>استان محل سکونت</label>
+                <SearchableSelect
+                  options={provinces}
+                  value={form.residenceProvince}
+                  onChange={(v) =>
+                    setForm((prev) => ({ ...prev, residenceProvince: v, residenceCity: '' }))
+                  }
+                  placeholder="انتخاب استان"
+                  searchPlaceholder="جستجوی استان..."
+                />
+              </div>
+              <div>
+                <label style={labelStyle}>شهر محل سکونت</label>
+                <SearchableSelect
+                  options={form.residenceProvince ? (citiesByProvince[form.residenceProvince] ?? []) : []}
                   value={form.residenceCity}
                   onChange={(v) => set('residenceCity', v)}
+                  placeholder={form.residenceProvince ? 'انتخاب شهر' : 'ابتدا استان را انتخاب کنید'}
+                  searchPlaceholder="جستجوی شهر..."
+                  disabled={!form.residenceProvince}
                 />
               </div>
             </div>
