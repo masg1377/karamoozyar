@@ -56,14 +56,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body
         className="font-sans antialiased"
-        style={{ fontFamily: 'Vazirmatn, Tahoma, sans-serif', background: '#cbd5e1' }}
+        style={{ fontFamily: 'Vazirmatn, Tahoma, sans-serif', background: '#eaf6fd' }}
       >
         <IosViewportFix />
         <ServiceWorkerRegistrar />
         <PwaInstallGate>
-          {/* height: 100% (نه 100dvh) — body با position:fixed + inset:0 دقیقاً
-              هم‌اندازه صفحه است؛ dvh در PWA های iOS باگ دارد و گاهی کوچک‌تر
-              از صفحه محاسبه می‌شود → گپ خاکستری پایین. 100% همیشه دقیق است. */}
+          {/* رنگِ پس‌زمینهٔ body روشن است (نه خاکستری) تا ناحیهٔ امنِ پایینِ گوشی
+              (home-indicator) در همهٔ صفحات روشن و هم‌رنگِ اپ دیده شود، نه خاکستری.
+              height: 100% — body با position:fixed + inset:0 دقیقاً هم‌اندازهٔ صفحه است. */}
           <div
             className="relative mx-auto"
             style={{ maxWidth: 500, height: '100%', overflowY: 'auto', overflowX: 'hidden' }}
