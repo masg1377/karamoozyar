@@ -68,7 +68,7 @@ export default function AdminNewsletterPage() {
 
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
-    <div style={{ padding: '16px 16px calc(96px + env(safe-area-inset-bottom))', display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ padding: '16px 16px calc(96px)', display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
           <h1 style={{ fontSize: 18, fontWeight: 700, color: '#1e293b', margin: 0 }}>خبرنامه</h1>

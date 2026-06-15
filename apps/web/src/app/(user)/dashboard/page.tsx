@@ -40,7 +40,7 @@ export default function UserDashboardPage() {
 
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
-      <div style={{ padding: '22px 22px calc(110px + env(safe-area-inset-bottom))', display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div style={{ padding: '22px 22px calc(110px)', display: 'flex', flexDirection: 'column', gap: 18 }}>
 
         {/* ── کارت خوش‌آمد ── */}
         <div style={{

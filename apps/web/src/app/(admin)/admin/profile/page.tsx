@@ -94,7 +94,7 @@ export default function AdminProfilePage() {
       style={{
         height: '100%',
         overflowY: 'auto',
-        padding: '18px 22px calc(110px + env(safe-area-inset-bottom))',
+        padding: '18px 22px calc(110px)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',

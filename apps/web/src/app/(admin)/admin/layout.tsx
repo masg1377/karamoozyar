@@ -233,7 +233,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         ref={setNavEl}
         style={{
           position: 'absolute',
-          bottom: 'calc(20px + env(safe-area-inset-bottom))',
+          bottom: 'calc(20px)',
           left: 42, right: 42,
           height: NAV_H,
           zIndex: 50,

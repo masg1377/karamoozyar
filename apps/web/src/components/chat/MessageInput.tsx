@@ -226,10 +226,7 @@ export function MessageInput({
     : '';
 
   return (
-    <div
-      className="relative w-full bg-white border-t border-gray-100"
-      style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
-    >
+    <div className="relative w-full bg-white border-t border-gray-100">
       {/* Reply bar */}
       {replyingTo && (
         <div className="flex items-center gap-3 px-4 py-2 bg-primary-50 border-b border-primary-100">

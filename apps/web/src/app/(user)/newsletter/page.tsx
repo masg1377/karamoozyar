@@ -69,7 +69,7 @@ export default function UserNewsletterPage() {
 
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
-    <div style={{ padding: '16px 16px calc(96px + env(safe-area-inset-bottom))', display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ padding: '16px 16px calc(96px)', display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div>
         <h1 style={{ fontSize: 18, fontWeight: 700, color: '#1e293b', margin: 0 }}>اطلاعیه‌ها</h1>
         <p style={{ fontSize: 12, color: '#94a3b8', margin: '2px 0 0' }}>{posts.length} اطلاعیه منتشر شده</p>

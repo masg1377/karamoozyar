@@ -462,7 +462,7 @@ export default function AdminUsersPage() {
 
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
-    <div style={{ padding: '16px 16px calc(96px + env(safe-area-inset-bottom))', display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ padding: '16px 16px calc(96px)', display: 'flex', flexDirection: 'column', gap: 14 }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>

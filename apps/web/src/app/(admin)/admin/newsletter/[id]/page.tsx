@@ -169,7 +169,7 @@ export default function AdminNewsletterDetailPage() {
       </div>
 
       {/* ── Scrollable content (goes under floating nav) ── */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', paddingBottom: 'calc(96px + env(safe-area-inset-bottom))' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', paddingBottom: 'calc(96px)' }}>
         <NewsletterPostCard post={post} isAdmin />
       </div>
 
