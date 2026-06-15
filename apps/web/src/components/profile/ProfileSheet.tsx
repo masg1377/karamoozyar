@@ -96,7 +96,6 @@ export function ProfileSheet({
           left: '50%',
           transform: 'translateX(-50%)',
           width: 'min(100vw, 480px)',
-          paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)',
           zIndex: 201,
         }}
       >
@@ -176,7 +175,10 @@ export function ProfileSheet({
               display: 'flex',
               flexDirection: 'column',
               gap: 9,
-              padding: '0 14px 20px',
+              padding: '0 14px',
+              // فاصلهٔ امنِ پایین داخلِ خودِ پنل تا شیت به لبهٔ پایین بچسبد ولی
+              // دکمه‌ها بالای home-indicator بمانند.
+              paddingBottom: 'calc(env(safe-area-inset-bottom) + 18px)',
             }}
           >
             {menuItem(
