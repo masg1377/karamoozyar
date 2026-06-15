@@ -1,20 +1,23 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import api from '@/lib/api-client';
 import { useChatStore } from '@/store/chat.store';
 import { useMessages } from '@/hooks/useMessages';
+import { useChatScroll } from '@/hooks/useChatScroll';
 import { useAuthStore } from '@/store/auth.store';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { MessageInput } from '@/components/chat/MessageInput';
 import { PinnedMessagesBar } from '@/components/chat/PinnedMessagesBar';
+import { DateDivider, StickyDate } from '@/components/chat/DateDivider';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
 import { UserAvatar } from '@/components/shared/UserAvatar';
 import { getSocket } from '@/lib/socket-client';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import type { ConversationSummaryDto, MessageDto } from '@karamooziyar/shared';
-import { cn } from '@/lib/utils';
+import { cn, isSameDay, formatDayLabel } from '@/lib/utils';
+import { goBackOrReplace } from '@/lib/navigation';
 import { toast } from 'sonner';
 import { ArrowRight, ChevronUp } from 'lucide-react';
 
@@ -29,12 +32,6 @@ export default function AdminConversationPage() {
   const [editingMessage, setEditingMessage] = useState<{ id: string; body: string } | null>(null);
   const [replyingTo, setReplyingTo] = useState<MessageDto | null>(null);
   const [pinnedMessages, setPinnedMessages] = useState<MessageDto[]>([]);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const prevScrollHeightRef = useRef(0);
-  const isFirstLoadRef = useRef(true);
-  const [autoScroll, setAutoScroll] = useState(true);
 
   useEffect(() => {
     api
@@ -57,6 +54,10 @@ export default function AdminConversationPage() {
   const typingUsers = useChatStore((s) => s.typingUsers[conversationId]);
   const isUserTyping = typingUsers ? typingUsers.size > 0 : false;
 
+  const {
+    scrollContainerRef, bottomRef, messageRefs, onScroll, handleLoadMoreClick, stickyLabel, showSticky,
+  } = useChatScroll(messages, { canLoadMore, loadMore, isLoadingMore });
+
   // Real-time pin updates
   useEffect(() => {
     if (!conversationId) return;
@@ -75,36 +76,12 @@ export default function AdminConversationPage() {
     return () => { socket.off(SOCKET_EVENTS.CHAT_MESSAGE_PINNED, onPinned); };
   }, [conversationId]);
 
-  useLayoutEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container || messages.length === 0) return;
-    if (isFirstLoadRef.current) {
-      isFirstLoadRef.current = false;
-      container.scrollTop = container.scrollHeight;
-    } else if (prevScrollHeightRef.current > 0) {
-      container.scrollTop = container.scrollHeight - prevScrollHeightRef.current;
-      prevScrollHeightRef.current = 0;
-    } else if (autoScroll) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
-
   useEffect(() => {
     if (!conversationId || messages.length === 0) return;
     const socket = getSocket();
     const lastMsg = messages[messages.length - 1];
     if (lastMsg) socket.emit(SOCKET_EVENTS.CHAT_SEEN, { conversationId, messageId: lastMsg.id });
   }, [conversationId, messages]);
-
-  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-    setAutoScroll(nearBottom);
-    if (el.scrollTop < 80 && canLoadMore && !isLoadingMore) {
-      prevScrollHeightRef.current = el.scrollHeight;
-      void loadMore();
-    }
-  }, [canLoadMore, loadMore, isLoadingMore]);
 
   const handleDelete = (messageId: string) => {
     const socket = getSocket();
@@ -166,7 +143,7 @@ export default function AdminConversationPage() {
 
       {/* ── Chat header ── */}
       <div className="flex-shrink-0 bg-white/90 backdrop-blur-md border-b border-blue-100/60 px-4 py-3 flex items-center gap-3">
-        <button onClick={() => router.back()} className="p-2 rounded-xl hover:bg-gray-100 transition-colors text-gray-500 flex-shrink-0">
+        <button onClick={() => goBackOrReplace(router, '/admin/conversations')} className="p-2 rounded-xl hover:bg-gray-100 transition-colors text-gray-500 flex-shrink-0">
           <ArrowRight className="w-5 h-5" />
         </button>
         {traineeFirst && traineeLast ? (
@@ -191,10 +168,12 @@ export default function AdminConversationPage() {
       />
 
       {/* Messages */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5" style={{ background: 'linear-gradient(180deg, #D4EDFB 0%, #EBF5FF 50%, #F2F8FF 100%)' }} onScroll={handleScroll}>
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5" style={{ background: 'linear-gradient(180deg, #D4EDFB 0%, #EBF5FF 50%, #F2F8FF 100%)' }} onScroll={onScroll}>
+        <StickyDate label={stickyLabel} visible={showSticky} />
+
         {canLoadMore && (
           <button
-            onClick={() => { if (scrollContainerRef.current) prevScrollHeightRef.current = scrollContainerRef.current.scrollHeight; void loadMore(); }}
+            onClick={handleLoadMoreClick}
             disabled={isLoadingMore}
             className="w-full flex items-center justify-center gap-1 py-2 text-xs text-primary-600 hover:text-primary-700 transition-colors disabled:opacity-50"
           >
@@ -212,24 +191,29 @@ export default function AdminConversationPage() {
           </div>
         )}
 
-        {messages.map((msg: MessageDto) => {
+        {messages.map((msg: MessageDto, i: number) => {
           const isAdminMsg = currentUser?.role === 'ADMIN' && msg.senderId === currentUser.id;
+          const prev = messages[i - 1];
+          const showDivider = !prev || !isSameDay(prev.createdAt, msg.createdAt);
           return (
-            <div key={msg.id} ref={(el) => { if (el) messageRefs.current.set(msg.id, el); else messageRefs.current.delete(msg.id); }}>
-              <MessageBubble
-                message={msg}
-                isMine={isAdminMsg}
-                onEdit={isAdminMsg ? (m) => setEditingMessage({ id: m.id, body: m.body ?? '' }) : undefined}
-                onDelete={handleDelete}
-                onReply={(m) => { setEditingMessage(null); setReplyingTo(m); }}
-                onPin={handlePin}
-                onUnpin={msg.pinnedAt ? handleUnpin : undefined}
-                senderFirstName={!isAdminMsg ? traineeFirst : undefined}
-                senderLastName={!isAdminMsg ? traineeLast : undefined}
-                senderAvatarUrl={!isAdminMsg ? traineeAvatar : undefined}
-                showAvatar={!isAdminMsg && !!traineeFirst}
-              />
-            </div>
+            <Fragment key={msg.id}>
+              {showDivider && <DateDivider label={formatDayLabel(msg.createdAt)} />}
+              <div ref={(el) => { if (el) messageRefs.current.set(msg.id, el); else messageRefs.current.delete(msg.id); }}>
+                <MessageBubble
+                  message={msg}
+                  isMine={isAdminMsg}
+                  onEdit={isAdminMsg ? (m) => setEditingMessage({ id: m.id, body: m.body ?? '' }) : undefined}
+                  onDelete={handleDelete}
+                  onReply={(m) => { setEditingMessage(null); setReplyingTo(m); }}
+                  onPin={handlePin}
+                  onUnpin={msg.pinnedAt ? handleUnpin : undefined}
+                  senderFirstName={!isAdminMsg ? traineeFirst : undefined}
+                  senderLastName={!isAdminMsg ? traineeLast : undefined}
+                  senderAvatarUrl={!isAdminMsg ? traineeAvatar : undefined}
+                  showAvatar={!isAdminMsg && !!traineeFirst}
+                />
+              </div>
+            </Fragment>
           );
         })}
 

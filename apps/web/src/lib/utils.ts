@@ -51,6 +51,28 @@ export function formatDate(dateStr: string): string {
   }).format(new Date(dateStr));
 }
 
+/** آیا دو تاریخ در یک روز تقویمی (محلی) هستند؟ */
+export function isSameDay(a: string | Date, b: string | Date): boolean {
+  const da = new Date(a);
+  const db = new Date(b);
+  return (
+    da.getFullYear() === db.getFullYear() &&
+    da.getMonth() === db.getMonth() &&
+    da.getDate() === db.getDate()
+  );
+}
+
+/** برچسب روز به سبک تلگرام: «امروز» / «دیروز» / تاریخ کامل شمسی */
+export function formatDayLabel(dateStr: string | Date): string {
+  const d = new Date(dateStr);
+  const now = new Date();
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+  if (diffDays === 0) return 'امروز';
+  if (diffDays === 1) return 'دیروز';
+  return new Intl.DateTimeFormat('fa-IR', { year: 'numeric', month: 'long', day: 'numeric' }).format(d);
+}
+
 export function isImageMime(mimeType: string): boolean {
   return mimeType.startsWith('image/');
 }
