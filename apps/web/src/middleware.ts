@@ -38,5 +38,8 @@ export function middleware(req: NextRequest): NextResponse {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api).*)'],
+  // هر مسیری که شامل یک نقطه باشد (فایل‌های static مثل sw.js، manifest.webmanifest،
+  // آیکون‌ها و …) و نیز _next و api از middleware مستثنا می‌شوند. در غیر این صورت
+  // درخواست این فایل‌ها در حالت ناوارد به /login ریدایرکت می‌شد و نصب PWA می‌شکست.
+  matcher: ['/((?!_next/static|_next/image|api|.*\\.).*)'],
 };
