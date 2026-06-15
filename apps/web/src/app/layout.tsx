@@ -4,6 +4,7 @@ import './globals.css';
 import 'react-multi-date-picker/styles/colors/teal.css';
 import { PwaInstallGate } from '@/components/shared/PwaInstallGate';
 import { IosViewportFix } from '@/components/shared/IosViewportFix';
+import { ServiceWorkerRegistrar } from '@/components/shared/ServiceWorkerRegistrar';
 
 export const metadata: Metadata = {
   title: {
@@ -58,6 +59,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         style={{ fontFamily: 'Vazirmatn, Tahoma, sans-serif', background: '#cbd5e1' }}
       >
         <IosViewportFix />
+        <ServiceWorkerRegistrar />
         <PwaInstallGate>
           {/* height: 100% (نه 100dvh) — body با position:fixed + inset:0 دقیقاً
               هم‌اندازه صفحه است؛ dvh در PWA های iOS باگ دارد و گاهی کوچک‌تر

@@ -11,6 +11,13 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+// ─── Fetch ───────────────────────────────────────────────────────────────────────
+// وجود یک fetch handler (حتی pass-through) برای نصب‌پذیری WebAPK در اندروید لازم است.
+// بدون آن، کروم به‌جای نصب standalone فقط یک شورتکات بوکمارک می‌سازد که نوار آدرس دارد.
+self.addEventListener('fetch', () => {
+  // درخواست‌ها به‌صورت پیش‌فرض مرورگر هندل می‌شوند (بدون respondWith).
+});
+
 // ─── Push ──────────────────────────────────────────────────────────────────────
 
 self.addEventListener('push', (event) => {

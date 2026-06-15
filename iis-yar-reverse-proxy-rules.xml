@@ -1,0 +1,37 @@
+<!-- ════════════════════════════════════════════════════════════════
+     قوانینِ reverse-proxy برای yar.mkrm.ir  (مخصوص IIS + ARR)
+     ────────────────────────────────────────────────────────────────
+     این ۴ قانون را *دقیقاً بعد از* تگِ <rules> در web.config همان سایتی
+     که آروان ترافیک yar را به آن می‌فرستد بگذار (طبق STEP 1، بسته به پورت:
+       پورت 5000 → C:\publish\web.config
+       پورت 5001 → C:\admin\web.config
+       پورت 443  → C:\pwa\web.config ).
+
+     شرطِ {HTTP_HOST} باعث می‌شود این قوانین فقط برای yar.mkrm.ir اجرا شوند
+     و بقیه‌ی دامنه‌ها (pwa و …) دست‌نخورده بمانند.
+     چون stopProcessing=true و اول از همه هستند، جای آن «ریدایرکت ۳۰۲» قبلی را می‌گیرند.
+     ════════════════════════════════════════════════════════════════ -->
+
+<rule name="YAR-API" stopProcessing="true">
+  <match url="^(api/.*)" />
+  <conditions><add input="{HTTP_HOST}" pattern="^yar\.mkrm\.ir$" /></conditions>
+  <action type="Rewrite" url="http://127.0.0.1:9101/{R:1}" />
+</rule>
+
+<rule name="YAR-FILES" stopProcessing="true">
+  <match url="^(files/.*)" />
+  <conditions><add input="{HTTP_HOST}" pattern="^yar\.mkrm\.ir$" /></conditions>
+  <action type="Rewrite" url="http://127.0.0.1:9101/{R:1}" />
+</rule>
+
+<rule name="YAR-SOCKETIO" stopProcessing="true">
+  <match url="^(socket\.io/.*)" />
+  <conditions><add input="{HTTP_HOST}" pattern="^yar\.mkrm\.ir$" /></conditions>
+  <action type="Rewrite" url="http://127.0.0.1:9101/{R:1}" />
+</rule>
+
+<rule name="YAR-APP" stopProcessing="true">
+  <match url="^(.*)" />
+  <conditions><add input="{HTTP_HOST}" pattern="^yar\.mkrm\.ir$" /></conditions>
+  <action type="Rewrite" url="http://127.0.0.1:9100/{R:1}" />
+</rule>
