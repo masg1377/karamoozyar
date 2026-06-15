@@ -51,11 +51,18 @@
     text-rendering: optimizeLegibility;
     /* جلوگیری از rubber-band overscroll که پشت ناچ را لو می‌دهد */
     overscroll-behavior-y: none;
-    /* App-shell lock — window هیچ‌وقت اسکرول نمی‌شود؛ جلوی گپ خاکستری
-       پایین صفحه در iOS (بعد از باز/بسته شدن کیبورد یا لود اول) را می‌گیرد.
-       اسکرول واقعی همیشه داخل کانتینرهای داخلی اپ اتفاق می‌افتد. */
+    /* App-shell lock — window هیچ‌وقت اسکرول نمی‌شود؛ اسکرول واقعی همیشه داخل
+       کانتینرهای داخلی اپ اتفاق می‌افتد.
+       ارتفاع از متغیر --app-height می‌آید که با JS برابرِ window.innerHeight ست
+       می‌شود (کامپوننت IosViewportFix). این دقیقاً ارتفاعِ قابل‌مشاهده است و
+       گپ/نوارِ خاکستریِ پایینِ صفحه (به‌خاطر نوار آدرسِ متغیرِ مرورگرِ موبایل و
+       باگِ dvh در iOS) را کامل از بین می‌برد — هم iOS هم اندروید.
+       fallback: 100% تا قبل از اجرای JS. */
     position: fixed;
-    inset: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--app-height, 100%);
     width: 100%;
     overflow: hidden;
   }

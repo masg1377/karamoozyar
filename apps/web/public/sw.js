@@ -1,22 +1,108 @@
 /**
  * کارآموزیار — Service Worker
- * وب‌پوش self-hosted (VAPID) — بدون هیچ سرویس third-party.
+ * وب‌پوش self-hosted (VAPID) + کشِ آفلاین.
  */
+
+// نسخهٔ کش — اگر روزی منطق کش عوض شد این را بالا ببر (v2, v3, ...) تا کشِ قدیمی پاک شود.
+const CACHE = 'karamooz-cache-v1';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    (async () => {
+      // کش‌های نسخه‌های قدیمی را پاک کن
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+      await self.clients.claim();
+    })(),
+  );
 });
 
-// ─── Fetch ───────────────────────────────────────────────────────────────────────
-// وجود یک fetch handler (حتی pass-through) برای نصب‌پذیری WebAPK در اندروید لازم است.
-// بدون آن، کروم به‌جای نصب standalone فقط یک شورتکات بوکمارک می‌سازد که نوار آدرس دارد.
-self.addEventListener('fetch', () => {
-  // درخواست‌ها به‌صورت پیش‌فرض مرورگر هندل می‌شوند (بدون respondWith).
+// ─── Fetch / کش ────────────────────────────────────────────────────────────────────
+// هدف: اپ آفلاین هم باز شود، ولی آنلاین همیشه تازه باشد.
+//  • صفحه (navigate): اول شبکه، اگر نت نبود از کش  → آفلاین باز می‌شود، آنلاین تازه است.
+//  • فایل‌های ثابت و عکس‌ها (/_next/static, /files, آیکون/فونت): اول کش (سریع + آفلاین).
+//  • دادهٔ زنده/احراز هویتی (/api, /socket.io) و version.json/sw.js: هیچ‌وقت کش نمی‌شود.
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return; // فقط GET کش می‌شود
+
+  let url;
+  try {
+    url = new URL(req.url);
+  } catch {
+    return;
+  }
+  if (url.origin !== self.location.origin) return; // فقط same-origin
+
+  const p = url.pathname;
+
+  // هرگز کش نشوند — دادهٔ زنده، نسخه، و خودِ سرویس‌ورکر
+  if (
+    p.startsWith('/api/') ||
+    p.startsWith('/socket.io/') ||
+    p === '/version.json' ||
+    p === '/sw.js'
+  ) {
+    return; // به مرورگر/شبکه بسپار
+  }
+
+  // صفحات HTML → network-first با fallback کش (آفلاین باز شود)
+  if (req.mode === 'navigate') {
+    event.respondWith(networkFirst(req));
+    return;
+  }
+
+  // دارایی‌های ثابت و فایل‌ها → cache-first با آپدیت پس‌زمینه
+  const isStatic =
+    p.startsWith('/_next/static/') ||
+    p.startsWith('/files/') ||
+    p.startsWith('/icons/') ||
+    p.startsWith('/fonts/') ||
+    /\.(?:js|css|png|jpe?g|webp|gif|svg|ico|woff2?|ttf|webmanifest)$/.test(p);
+  if (isStatic) {
+    event.respondWith(cacheFirst(req));
+    return;
+  }
+  // بقیه → پیش‌فرضِ مرورگر
 });
+
+async function networkFirst(req) {
+  const cache = await caches.open(CACHE);
+  try {
+    const res = await fetch(req);
+    if (res && res.ok) cache.put(req, res.clone());
+    return res;
+  } catch {
+    const cached = (await cache.match(req)) || (await cache.match('/'));
+    if (cached) return cached;
+    throw new Error('offline');
+  }
+}
+
+async function cacheFirst(req) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match(req);
+  if (cached) {
+    // در پس‌زمینه تازه‌اش کن (بدون معطل‌کردن کاربر)
+    void fetch(req)
+      .then((res) => {
+        if (res && res.ok) cache.put(req, res.clone());
+      })
+      .catch(() => {});
+    return cached;
+  }
+  try {
+    const res = await fetch(req);
+    if (res && res.ok) cache.put(req, res.clone());
+    return res;
+  } catch {
+    return cached || Response.error();
+  }
+}
 
 // ─── Push ──────────────────────────────────────────────────────────────────────
 

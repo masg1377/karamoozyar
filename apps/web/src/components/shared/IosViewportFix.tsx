@@ -3,15 +3,25 @@
 import { useEffect } from 'react';
 
 /**
- * فیکس باگ ویوپورت iOS — وقتی کیبورد باز/بسته می‌شود سافاری گاهی window را
- * اسکرول‌شده رها می‌کند و یک گپ خاکستری پایین اپ می‌ماند تا کاربر دستی اسکرول کند.
- * این کامپوننت با visualViewport آن اسکرول سرگردان را بلافاصله صفر می‌کند.
+ * فیکس ویوپورت موبایل (هم iOS هم اندروید).
+ *
+ * ۱) متغیر CSS «--app-height» را برابرِ ارتفاعِ واقعیِ قابل‌مشاهده (window.innerHeight)
+ *    ست می‌کند. body در globals.css ارتفاعش را از همین می‌گیرد؛ بنابراین دیگر
+ *    گپ/نوارِ خاکستریِ پایینِ صفحه (به‌خاطر نوار آدرسِ متغیرِ مرورگر و باگِ dvh در
+ *    iOS) ایجاد نمی‌شود — صفحه همیشه دقیقاً اندازهٔ ناحیهٔ دیده‌شده است.
+ * ۲) اسکرولِ سرگردانِ window را صفر می‌کند (باگ iOS بعد از باز/بسته‌شدنِ کیبورد).
  */
 export function IosViewportFix() {
   useEffect(() => {
+    const root = document.documentElement;
+
+    const setAppHeight = () => {
+      root.style.setProperty('--app-height', `${window.innerHeight}px`);
+    };
+
     const reset = () => {
       if (window.scrollY !== 0) window.scrollTo(0, 0);
-      if (document.documentElement.scrollTop !== 0) document.documentElement.scrollTop = 0;
+      if (root.scrollTop !== 0) root.scrollTop = 0;
     };
 
     const vv = window.visualViewport;
@@ -20,17 +30,23 @@ export function IosViewportFix() {
       if (!vv || vv.height >= window.innerHeight - 30) reset();
     };
 
-    // بعد از blur شدن اینپوت (بسته شدن کیبورد) کمی صبر و بعد ریست
+    const onResize = () => setAppHeight();
     const onFocusOut = () => setTimeout(reset, 60);
+    const onOrientation = () => setTimeout(() => { setAppHeight(); reset(); }, 120);
 
+    // مقداردهیِ اولیه
+    setAppHeight();
+    reset();
+
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onOrientation);
     vv?.addEventListener('resize', onVvChange);
     vv?.addEventListener('scroll', onVvChange);
     document.addEventListener('focusout', onFocusOut);
-    window.addEventListener('orientationchange', () => setTimeout(reset, 120));
-    // لود اول
-    reset();
 
     return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onOrientation);
       vv?.removeEventListener('resize', onVvChange);
       vv?.removeEventListener('scroll', onVvChange);
       document.removeEventListener('focusout', onFocusOut);
