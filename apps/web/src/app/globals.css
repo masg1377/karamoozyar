@@ -51,24 +51,13 @@
     text-rendering: optimizeLegibility;
     /* جلوگیری از rubber-band overscroll که پشت ناچ را لو می‌دهد */
     overscroll-behavior-y: none;
-    /* App-shell lock — window هیچ‌وقت اسکرول نمی‌شود؛ اسکرول واقعی همیشه داخل
-       کانتینرهای داخلی اپ اتفاق می‌افتد. (رفتار پیش‌فرض همه‌ی پلتفرم‌ها) */
+    /* App-shell lock — window هیچ‌وقت اسکرول نمی‌شود؛ جلوی گپ خاکستری
+       پایین صفحه در iOS (بعد از باز/بسته شدن کیبورد یا لود اول) را می‌گیرد.
+       اسکرول واقعی همیشه داخل کانتینرهای داخلی اپ اتفاق می‌افتد. */
     position: fixed;
     inset: 0;
     width: 100%;
     overflow: hidden;
-  }
-
-  /* فقط iOS — ارتفاع دقیق از متغیر --app-height (با JS از visualViewport ست می‌شود):
-      • رفع باکس خاکستری پایین صفحه (باگ 100%/100dvh در iOS)
-      • هنگام باز شدن کیبورد، ارتفاع کم می‌شود و اینپوت بالای کیبورد می‌آید
-     اندروید/دسکتاپ همان inset:0 بالا را نگه می‌دارند. */
-  html.ios body {
-    inset: auto;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: var(--app-height, 100dvh);
   }
 
   /* Scrollbar — hidden globally for native app feel */

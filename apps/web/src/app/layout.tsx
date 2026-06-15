@@ -56,7 +56,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body
         className="font-sans antialiased"
-        style={{ fontFamily: 'Vazirmatn, Tahoma, sans-serif', background: '#F6F7F9' }}
+        style={{ fontFamily: 'Vazirmatn, Tahoma, sans-serif', background: '#cbd5e1' }}
       >
         <IosViewportFix />
         <ServiceWorkerRegistrar />

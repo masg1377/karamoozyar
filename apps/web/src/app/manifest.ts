@@ -5,7 +5,8 @@ export default function manifest(): MetadataRoute.Manifest {
     name: 'کارآموزیار',
     short_name: 'کارآموزیار',
     description: 'سامانه ارتباطی مرکز کارشناسان رسمی دادگستری مازندران',
-    start_url: '/dashboard',
+    // ریشه — تا اپ نصب‌شده همیشه اول اسپلش‌اسکرین را نشان دهد، سپس به مقصد برود
+    start_url: '/',
     display: 'standalone',
     background_color: '#ffffff',
     theme_color: '#1B4F72',

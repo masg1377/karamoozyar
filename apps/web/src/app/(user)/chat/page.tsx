@@ -1,11 +1,12 @@
 'use client';
 
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth.store';
 import { useChatStore } from '@/store/chat.store';
 import { useMessages } from '@/hooks/useMessages';
 import { useChatScroll } from '@/hooks/useChatScroll';
+import { useIosKeyboardInset } from '@/hooks/useIosKeyboardInset';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { MessageInput } from '@/components/chat/MessageInput';
 import { PinnedMessagesBar } from '@/components/chat/PinnedMessagesBar';
@@ -45,6 +46,9 @@ export default function UserChatPage() {
   const {
     scrollContainerRef, bottomRef, messageRefs, onScroll, handleLoadMoreClick, stickyLabel, showSticky,
   } = useChatScroll(messages, { canLoadMore, loadMore, isLoadingMore });
+
+  const chatRootRef = useRef<HTMLDivElement>(null);
+  useIosKeyboardInset(chatRootRef);
 
   // Load pinned messages when conversation is ready
   useEffect(() => {
@@ -137,7 +141,7 @@ export default function UserChatPage() {
   if (!conversation || !user) return null;
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div ref={chatRootRef} className="h-full flex flex-col overflow-hidden">
 
       {/* ── Chat header ───────────────────────────────────────── */}
       <div className="flex-shrink-0 bg-white/90 backdrop-blur-md border-b border-blue-100/60 px-4 py-3 flex items-center gap-3">
