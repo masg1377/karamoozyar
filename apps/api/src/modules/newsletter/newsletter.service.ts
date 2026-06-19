@@ -1,5 +1,4 @@
 import {
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -131,8 +130,7 @@ export class NewsletterService {
   }
 
   async update(postId: string, requesterId: string, input: PostInput): Promise<NewsletterPostDto> {
-    const post = await this.findPostOrFail(postId);
-    if (post.authorId !== requesterId) throw new ForbiddenException('فقط نویسنده می‌تواند ویرایش کند');
+    await this.findPostOrFail(postId);
 
     const resolvedBlocks = await this.resolveBlocks(input.contentBlocks, input.uploads);
 
@@ -163,8 +161,7 @@ export class NewsletterService {
   }
 
   async softDelete(postId: string, requesterId: string): Promise<{ message: string }> {
-    const post = await this.findPostOrFail(postId);
-    if (post.authorId !== requesterId) throw new ForbiddenException('دسترسی غیرمجاز');
+    await this.findPostOrFail(postId);
 
     const attachments = await this.prisma.newsletterAttachment.findMany({ where: { postId } });
     await Promise.all(attachments.map((a) => this.uploadsService.deleteFile(a.fileKey)));
