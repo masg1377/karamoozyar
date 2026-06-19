@@ -1,6 +1,6 @@
 export const FILE_LIMITS = {
-  MAX_SIZE_BYTES: 15 * 1024 * 1024, // 15 MB
-  MAX_SIZE_MB: 15,
+  MAX_SIZE_BYTES: 14 * 1024 * 1024, // 14 MB
+  MAX_SIZE_MB: 14,
 } as const;
 
 export const ALLOWED_MIME_TYPES = [

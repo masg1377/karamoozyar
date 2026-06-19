@@ -93,7 +93,7 @@ export default (): AppConfig => ({
     useSsl: process.env['S3_USE_SSL'] === 'true',
   },
   upload: {
-    maxFileSizeBytes: parseInt(process.env['MAX_FILE_SIZE_BYTES'] ?? '15728640', 10),
+    maxFileSizeBytes: parseInt(process.env['MAX_FILE_SIZE_BYTES'] ?? '14680064', 10),
   },
   otp: {
     expirySeconds: parseInt(process.env['OTP_EXPIRY_SECONDS'] ?? '120', 10),

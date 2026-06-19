@@ -157,9 +157,9 @@ export default function AdminConversationPage() {
         )}
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold text-gray-800 truncate">{userName}</p>
-          <p className="text-xs text-green-500 font-medium">
-            {isUserTyping ? 'در حال تایپ...' : 'آنلاین'}
-          </p>
+          {isUserTyping && (
+            <p className="text-xs text-primary-500 font-medium">در حال تایپ...</p>
+          )}
         </div>
       </div>
 

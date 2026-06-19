@@ -152,11 +152,9 @@ export default function UserChatPage() {
           >
             <Shield className="w-5 h-5" />
           </div>
-          <span className="absolute bottom-0 left-0 w-2.5 h-2.5 bg-green-400 border-2 border-white rounded-full" />
         </div>
         <div className="flex-1">
           <p className="text-sm font-bold text-gray-800">مدیریت مرکز</p>
-          <p className="text-xs text-green-500 font-medium">آنلاین</p>
         </div>
         <button onClick={() => goBackOrReplace(router, '/dashboard')} className="text-gray-400 hover:text-gray-600">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-5 h-5">

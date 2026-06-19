@@ -541,7 +541,12 @@ export default function AdminUsersPage() {
                 {/* Info */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-gray-800 truncate">{u.firstName} {u.lastName}</p>
+                    <Link
+                      href={`/admin/conversations?userId=${u.id}`}
+                      className="text-sm font-semibold text-gray-800 truncate hover:text-primary-600 transition-colors"
+                    >
+                      {u.firstName} {u.lastName}
+                    </Link>
                     {!u.isActive && (
                       <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-medium flex-shrink-0">غیرفعال</span>
                     )}

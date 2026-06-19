@@ -31,6 +31,16 @@ const MANAGERS = [
     role: Role.ADMIN,
   },
   {
+    nationalId: '2064936289',
+    firstName: 'ماریا',
+    lastName: 'نعمتی',
+    phoneNumber: '09387055652',
+    password: 'Maria@Nemati1404',
+    judicialDomain: 'مرکزی',
+    expertiseField: 'مدیریت',
+    role: Role.ADMIN,
+  },
+  {
     nationalId: '2092108018',
     firstName: 'فرشته',
     lastName: 'خداشناس',
