@@ -60,13 +60,14 @@ export class UploadsService implements OnModuleInit {
     this.publicBaseUrl = storage.publicBaseUrl.replace(/\/$/, '');
 
     this.s3 = new S3Client({
-      endpoint: s3Config.useSsl ? undefined : s3Config.endpoint,
+      // همیشه از endpoint سفارشی استفاده می‌کنیم — هم برای MinIO هم سرویس‌های S3-compatible (Poshtiban و غیره)
+      endpoint: s3Config.endpoint,
       region: s3Config.region,
       credentials: {
         accessKeyId: s3Config.accessKey,
         secretAccessKey: s3Config.secretKey,
       },
-      forcePathStyle: !s3Config.useSsl, // Required for MinIO
+      forcePathStyle: true, // الزامی برای MinIO، Poshtiban و اکثر S3-compatible
     });
   }
 
@@ -241,9 +242,8 @@ export class UploadsService implements OnModuleInit {
     }
 
     const s3Config = this.configService.get('s3', { infer: true });
-    const fileUrl = s3Config.useSsl
-      ? `https://s3.${s3Config.region}.amazonaws.com/${this.bucketName}/${fileKey}`
-      : `${s3Config.endpoint}/${this.bucketName}/${fileKey}`;
+    // همیشه از endpoint سفارشی استفاده می‌کنیم (path-style)
+    const fileUrl = `${s3Config.endpoint}/${this.bucketName}/${fileKey}`;
 
     return {
       fileKey,

@@ -46,50 +46,9 @@ services:
     networks:
       - karamooziyar_net
 
-  minio:
-    image: minio/minio:latest
-    container_name: karamooziyar_minio
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_secret}
-    ports:
-      # Exposed on 0.0.0.0 — presigned URLs embed the public IP (185.255.88.13:9000)
-      # so browsers must be able to reach this port directly.
-      - "0.0.0.0:${MINIO_PORT:-9000}:9000"
-      - "0.0.0.0:${MINIO_CONSOLE_PORT:-9001}:9001"
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    networks:
-      - karamooziyar_net
-
-  minio_init:
-    image: minio/mc:latest
-    container_name: karamooziyar_minio_init
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-        mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin_secret};
-        mc mb --ignore-existing myminio/${MINIO_BUCKET:-karamooziyar};
-        mc anonymous set none myminio/${MINIO_BUCKET:-karamooziyar};
-        echo 'MinIO bucket ready';
-        exit 0;
-      "
-    networks:
-      - karamooziyar_net
-
 volumes:
   postgres_data:
   redis_data:
-  minio_data:
 
 networks:
   karamooziyar_net:
