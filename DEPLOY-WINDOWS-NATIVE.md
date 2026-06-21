@@ -1,5 +1,5 @@
 # KarAmoozYar — Windows Server 2022 Native Deployment
-## (No Docker — PostgreSQL + Redis + MinIO run as Windows services)
+## (No Docker — PostgreSQL + Redis run as Windows services | Storage: Poshtiban S3)
 
 **VPS:** `185.255.88.13` · Windows Server 2022 (Build 20348)
 
@@ -11,10 +11,11 @@
 |---------------|------|-------------|
 | Frontend (Web) | 9100 | 0.0.0.0 (public) |
 | Backend (API)  | 9101 | 0.0.0.0 (public) |
-| MinIO API      | 9000 | 0.0.0.0 (public — required for presigned URLs) |
-| MinIO Console  | 9001 | 0.0.0.0 (public) |
 | PostgreSQL     | 9432 | 127.0.0.1 (localhost only) |
 | Redis          | 9379 | 127.0.0.1 (localhost only) |
+
+> File storage (images, voice, documents) is handled by **Poshtiban S3** (`teh-3.s3.poshtiban.com`).  
+> No local storage service needed on the VPS.
 
 ---
 
@@ -57,17 +58,7 @@ pm2 --version
 
 ---
 
-## Step 4 — Install NSSM (Windows Service Manager)
-
-NSSM is used to run MinIO as a Windows service.
-
-```powershell
-choco install nssm -y
-```
-
----
-
-## Step 5 — Install PostgreSQL 16
+## Step 4 — Install PostgreSQL 16
 
 ```powershell
 choco install postgresql16 --params '/Password:PG_SUPER_2024!Admin /Port:9432 /ServiceName:postgresql-16' -y
@@ -108,7 +99,7 @@ Make `psql` permanently available in PATH:
 
 ---
 
-## Step 6 — Install Memurai (Redis for Windows)
+## Step 5 — Install Memurai (Redis for Windows)
 
 Memurai is a Redis 7-compatible server that runs natively on Windows.
 
@@ -149,48 +140,7 @@ redis-cli -p 9379 -a ttrzodtqSheUuNc5kAc0IuEA ping
 
 ---
 
-## Step 7 — Install and Configure MinIO
-
-```powershell
-# Create directories
-New-Item -ItemType Directory -Force -Path C:\minio\bin
-New-Item -ItemType Directory -Force -Path C:\minio\data
-
-# Download MinIO binary
-Invoke-WebRequest -Uri "https://dl.min.io/server/minio/release/windows-amd64/minio.exe" -OutFile "C:\minio\bin\minio.exe"
-
-# Verify download
-C:\minio\bin\minio.exe --version
-```
-
-Register MinIO as a Windows service using NSSM:
-```powershell
-nssm install KarAmoozMinIO "C:\minio\bin\minio.exe"
-nssm set KarAmoozMinIO AppParameters "server C:\minio\data --address :9000 --console-address :9001"
-nssm set KarAmoozMinIO AppEnvironmentExtra "MINIO_ROOT_USER=karamooz_minio" "MINIO_ROOT_PASSWORD=cEubvkQ6wr5t0bN8NyiJkc8F"
-nssm set KarAmoozMinIO DisplayName "KarAmoozYar MinIO"
-nssm set KarAmoozMinIO Description "MinIO Object Storage for KarAmoozYar"
-nssm set KarAmoozMinIO Start SERVICE_AUTO_START
-nssm set KarAmoozMinIO AppStdout "C:\minio\minio-out.log"
-nssm set KarAmoozMinIO AppStderr "C:\minio\minio-error.log"
-
-# Start the service
-nssm start KarAmoozMinIO
-
-# Verify
-Get-Service KarAmoozMinIO
-# Status must be: Running
-```
-
-Verify MinIO is accessible:
-```powershell
-Invoke-WebRequest -Uri "http://localhost:9000/minio/health/live" -UseBasicParsing
-# StatusCode must be: 200
-```
-
----
-
-## Step 8 — Copy Project to VPS
+## Step 6 — Copy Project to VPS
 
 Via RDP copy-paste or SCP/WinSCP, copy the project to:
 ```
@@ -211,7 +161,7 @@ git clone <your-repo-url> KarAmoozYar
 
 ---
 
-## Step 9 — Create Log Directories
+## Step 7 — Create Log Directories
 
 ```powershell
 cd C:\Projects\KarAmoozYar
@@ -221,7 +171,7 @@ New-Item -ItemType Directory -Force -Path apps\web\logs
 
 ---
 
-## Step 10 — Install Project Dependencies
+## Step 8 — Install Project Dependencies
 
 ```powershell
 cd C:\Projects\KarAmoozYar
@@ -230,7 +180,7 @@ pnpm install
 
 ---
 
-## Step 11 — Build Shared Package
+## Step 9 — Build Shared Package
 
 ```powershell
 cd C:\Projects\KarAmoozYar
@@ -239,7 +189,7 @@ pnpm --filter @karamooziyar/shared build
 
 ---
 
-## Step 12 — Run Prisma Generate
+## Step 10 — Run Prisma Generate
 
 ```powershell
 cd C:\Projects\KarAmoozYar\apps\api
@@ -248,7 +198,7 @@ pnpm db:generate
 
 ---
 
-## Step 13 — Run Prisma Migrate Deploy
+## Step 11 — Run Prisma Migrate Deploy
 
 ```powershell
 cd C:\Projects\KarAmoozYar\apps\api
@@ -264,7 +214,7 @@ psql -U karamooz_user -p 9432 -d karamooziyar -c "SELECT 1;"
 
 ---
 
-## Step 14 — Run Database Seed
+## Step 12 — Run Database Seed
 
 ```powershell
 cd C:\Projects\KarAmoozYar\apps\api
@@ -275,7 +225,7 @@ pnpm db:seed
 
 ---
 
-## Step 15 — Build All Applications
+## Step 13 — Build All Applications
 
 ```powershell
 cd C:\Projects\KarAmoozYar
@@ -286,7 +236,7 @@ This runs `turbo run build` — builds shared → api → web in correct order.
 
 ---
 
-## Step 16 — Start API and Web via PM2
+## Step 14 — Start API and Web via PM2
 
 ```powershell
 cd C:\Projects\KarAmoozYar
@@ -314,7 +264,7 @@ pm2 logs karamooz-web --lines 50
 
 ---
 
-## Step 17 — Configure Auto-Start on Reboot
+## Step 15 — Configure Auto-Start on Reboot
 
 ```powershell
 # Save current PM2 process list
@@ -323,32 +273,31 @@ pm2 save
 # Register PM2 to start automatically with Windows
 pm2-startup install
 
-# Verify all 3 services (PG, Memurai, MinIO) are set to auto-start
-Get-Service postgresql-16, Memurai, KarAmoozMinIO | Select Name, StartType
+# Verify services (PG, Memurai) are set to auto-start
+Get-Service postgresql-16, Memurai | Select Name, StartType
 # StartType for all must be: Automatic
 ```
 
 ---
 
-## Step 18 — Open Windows Firewall Ports
+## Step 16 — Open Windows Firewall Ports
 
 Run PowerShell **as Administrator**:
 
 ```powershell
-New-NetFirewallRule -DisplayName "KarAmooz Web 9100"          -Direction Inbound -Protocol TCP -LocalPort 9100 -Action Allow
-New-NetFirewallRule -DisplayName "KarAmooz API 9101"          -Direction Inbound -Protocol TCP -LocalPort 9101 -Action Allow
-New-NetFirewallRule -DisplayName "KarAmooz MinIO 9000"        -Direction Inbound -Protocol TCP -LocalPort 9000 -Action Allow
-New-NetFirewallRule -DisplayName "KarAmooz MinIO Console 9001" -Direction Inbound -Protocol TCP -LocalPort 9001 -Action Allow
+New-NetFirewallRule -DisplayName "KarAmooz Web 9100" -Direction Inbound -Protocol TCP -LocalPort 9100 -Action Allow
+New-NetFirewallRule -DisplayName "KarAmooz API 9101" -Direction Inbound -Protocol TCP -LocalPort 9101 -Action Allow
 
 # Confirm
 Get-NetFirewallRule -DisplayName "KarAmooz*" | Format-Table DisplayName, Enabled, Direction, Action
 ```
 
-> PostgreSQL (9432) and Redis (9379) are NOT opened — they are localhost-only.
+> PostgreSQL (9432) and Redis (9379) are NOT opened — they are localhost-only.  
+> File storage goes through Poshtiban S3 directly — no port needed on this VPS.
 
 ---
 
-## Step 19 — Test Everything
+## Step 17 — Test Everything
 
 ```powershell
 # API health
@@ -356,14 +305,10 @@ Invoke-WebRequest -Uri "http://185.255.88.13:9101/api/v1/health" -UseBasicParsin
 
 # Frontend
 Invoke-WebRequest -Uri "http://185.255.88.13:9100" -UseBasicParsing
-
-# MinIO health
-Invoke-WebRequest -Uri "http://185.255.88.13:9000/minio/health/live" -UseBasicParsing
 ```
 
 Open in browser:
 - Frontend: `http://185.255.88.13:9100`
-- MinIO Console: `http://185.255.88.13:9001` (login: `karamooz_minio` / `cEubvkQ6wr5t0bN8NyiJkc8F`)
 
 ---
 
@@ -376,23 +321,18 @@ pm2 logs karamooz-api             # API only
 pm2 logs karamooz-web             # Web only
 pm2 logs karamooz-api --lines 200 --err   # last 200 error lines
 
-# MinIO logs
-Get-Content C:\minio\minio-error.log -Tail 50
-Get-Content C:\minio\minio-out.log -Tail 50
-
 # PostgreSQL logs
 Get-Content "C:\Program Files\PostgreSQL\16\data\log\*.log" -Tail 50
 
 # Windows service events
 Get-EventLog -LogName Application -Source *Memurai* -Newest 20
-Get-EventLog -LogName Application -Source *MinIO* -Newest 20
 ```
 
 ---
 
 ## Restarting After VPS Reboot
 
-PostgreSQL, Memurai, and MinIO are Windows services with `Automatic` start — they restart automatically.  
+PostgreSQL and Memurai are Windows services with `Automatic` start — they restart automatically.  
 PM2 restarts automatically via `pm2-windows-startup`.
 
 To manually restart everything:
@@ -400,7 +340,6 @@ To manually restart everything:
 # Services (should already be running after reboot)
 Start-Service postgresql-16
 Start-Service Memurai
-Start-Service KarAmoozMinIO
 
 # Apps
 cd C:\Projects\KarAmoozYar
@@ -442,7 +381,7 @@ pm2 restart karamooz-web
 pm2 status
 ```
 
-> PostgreSQL, Memurai (Redis), and MinIO do NOT need to be restarted during app updates.
+> PostgreSQL and Memurai (Redis) do NOT need to be restarted during app updates.
 
 ---
 
@@ -457,17 +396,16 @@ pm2 status
 | Postgres port | `9432` |
 | Redis password | `ttrzodtqSheUuNc5kAc0IuEA` |
 | Redis port | `9379` |
-| MinIO user | `karamooz_minio` |
-| MinIO password | `cEubvkQ6wr5t0bN8NyiJkc8F` |
-| MinIO API port | `9000` |
-| MinIO Console port | `9001` |
+| S3 Endpoint | `https://teh-3.s3.poshtiban.com` |
+| S3 Bucket | `karamooziyar` |
+| S3 Access Key | `M91EJZ8N0WT3MW0UP7E4` |
 
 ---
 
 ## FAQ
 
-**Q: MinIO files (images/audio/video) not loading — 403 or connection refused?**  
-Port 9000 must be open in the Windows Firewall (Step 18). The browser fetches files directly from MinIO via presigned URLs that embed `185.255.88.13:9000`.
+**Q: Files (images/audio/video) not loading?**  
+Files are served via Poshtiban S3 presigned URLs. Check that `STORAGE_DRIVER=s3` and all `S3_*` variables are set correctly in `apps/api/.env`. Check API logs for S3 upload errors.
 
 **Q: Prisma migrate fails — "password authentication failed"?**  
 Run `psql -U karamooz_user -p 9432 -d karamooziyar -c "SELECT 1;"` and check the error. Make sure `apps/api/.env` `DATABASE_URL` has the correct password.
@@ -480,7 +418,7 @@ Frontend connects to `NEXT_PUBLIC_WS_URL=http://185.255.88.13:9101`. Port 9101 m
 
 **Q: Port already in use?**  
 ```powershell
-netstat -ano | findstr ":9100 :9101 :9000 :9001 :9432 :9379"
+netstat -ano | findstr ":9100 :9101 :9432 :9379"
 # Find the PID and kill it:
 taskkill /PID <pid> /F
 ```

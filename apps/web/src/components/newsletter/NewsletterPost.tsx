@@ -364,7 +364,7 @@ export function NewsletterPostCard({ post, isAdmin, onEdit, onDelete, onPin }: N
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-primary-100 rounded-full flex items-center justify-center text-primary-700 text-xs font-bold">م</div>
           <div>
-            <p className="text-sm font-medium text-gray-800">{post.author.firstName} {post.author.lastName}</p>
+            <p className="text-sm font-medium text-gray-800">مدیریت مرکز</p>
             <p className="text-xs text-gray-400">{formatDate(post.createdAt)}</p>
           </div>
         </div>
