@@ -1,6 +1,7 @@
 import { NestFactory, Reflector } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import type { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { join, isAbsolute } from 'path';
@@ -21,6 +22,14 @@ async function bootstrap(): Promise<void> {
   // فایل‌های آپلودشده روی دیسک از مسیر /files/<fileKey> سرو می‌شوند
   const uploadDir = process.env['UPLOAD_DIR'] ?? 'uploads';
   const uploadPath = isAbsolute(uploadDir) ? uploadDir : join(process.cwd(), uploadDir);
+  // میدلور دانلود: اگه ?dl=filename باشه، Content-Disposition: attachment می‌گذارد (iOS force download)
+  app.use('/files', (req: Request, res: Response, next: NextFunction) => {
+    const dl = (req.query as Record<string, string | undefined>)['dl'];
+    if (dl) {
+      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(dl)}`);
+    }
+    next();
+  });
   app.useStaticAssets(uploadPath, { prefix: '/files/', maxAge: '1d', index: false });
 
   // ─── CORS ──────────────────────────────────────────────────────

@@ -139,12 +139,19 @@ export class UploadsService implements OnModuleInit {
     return this.uploadFile(file, 'newsletter');
   }
 
-  async getPresignedUrl(fileKey: string, expiresIn = 3600): Promise<string> {
+  async getPresignedUrl(fileKey: string, expiresIn = 3600, fileName?: string): Promise<string> {
     // حالت لوکال: لینک مستقیم از خود API (مسیر static /files)
     if (this.driver === 'local') {
-      return `${this.publicBaseUrl}/files/${fileKey}`;
+      const base = `${this.publicBaseUrl}/files/${fileKey}`;
+      return fileName ? `${base}?dl=${encodeURIComponent(fileName)}` : base;
     }
-    const command = new GetObjectCommand({ Bucket: this.bucketName, Key: fileKey });
+    const command = new GetObjectCommand({
+      Bucket: this.bucketName,
+      Key: fileKey,
+      ...(fileName && {
+        ResponseContentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+      }),
+    });
     return getSignedUrl(this.s3, command, { expiresIn });
   }
 
@@ -191,6 +198,8 @@ export class UploadsService implements OnModuleInit {
 
   private async uploadFile(file: Express.Multer.File, folder: string): Promise<UploadResult> {
     const ext = path.extname(file.originalname).toLowerCase();
+    // Multer reads multipart headers as latin1 by default — browsers send UTF-8, so convert back
+    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
     const fileKey = `${folder}/${uuidv4()}${ext}`;
 
     // ── حالت لوکال: ذخیره روی دیسک کنار پروژه ──
@@ -205,8 +214,8 @@ export class UploadsService implements OnModuleInit {
       }
       return {
         fileKey,
-        fileUrl: `${this.publicBaseUrl}/files/${fileKey}`,
-        fileName: file.originalname,
+        fileUrl: `${this.publicBaseUrl}/files/${fileKey}?dl=${encodeURIComponent(originalName)}`,
+        fileName: originalName,
         mimeType: file.mimetype,
         fileSize: file.size,
         duration: null,
@@ -222,7 +231,7 @@ export class UploadsService implements OnModuleInit {
           ContentType: file.mimetype,
           ContentLength: file.size,
           Metadata: {
-            originalName: Buffer.from(file.originalname).toString('base64'),
+            originalName: Buffer.from(originalName).toString('base64'),
           },
         }),
       );
@@ -239,7 +248,7 @@ export class UploadsService implements OnModuleInit {
     return {
       fileKey,
       fileUrl,
-      fileName: file.originalname,
+      fileName: originalName,
       mimeType: file.mimetype,
       fileSize: file.size,
       duration: null,
@@ -288,12 +297,15 @@ export class UploadsService implements OnModuleInit {
   ): Promise<string> {
     let fileKey: string;
 
+    let fileName: string | undefined;
+
     if (type === 'newsletter') {
       const att = await this.prisma.newsletterAttachment.findUnique({
         where: { id: attachmentId },
       });
       if (!att) throw new NotFoundException('فایل پیدا نشد');
       fileKey = att.fileKey;
+      fileName = att.fileName;
     } else {
       const att = await this.prisma.messageAttachment.findUnique({
         where: { id: attachmentId },
@@ -308,8 +320,9 @@ export class UploadsService implements OnModuleInit {
         }
       }
       fileKey = att.fileKey;
+      fileName = att.fileName;
     }
 
-    return this.getPresignedUrl(fileKey, 3600);
+    return this.getPresignedUrl(fileKey, 3600, fileName);
   }
 }
