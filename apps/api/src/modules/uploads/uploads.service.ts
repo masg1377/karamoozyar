@@ -197,11 +197,19 @@ export class UploadsService implements OnModuleInit {
     }
   }
 
+  /** حذف کاراکترهای خطرناک از نام فایل، حروف فارسی/عربی سالم می‌مانند */
+  private sanitizeFileName(name: string): string {
+    return name.replace(/[/\\?%*:|"<>\x00-\x1f]/g, '_').trim() || 'file';
+  }
+
   private async uploadFile(file: Express.Multer.File, folder: string): Promise<UploadResult> {
     const ext = path.extname(file.originalname).toLowerCase();
     // Multer reads multipart headers as latin1 by default — browsers send UTF-8, so convert back
     const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
-    const fileKey = `${folder}/${uuidv4()}${ext}`;
+    // اسم فایل در باکت = تایم‌استمپ + اسم اصلی (مثال: 1703123456789_گزارش_مالی.pdf)
+    const baseName = path.basename(originalName, ext);
+    const safeName = this.sanitizeFileName(baseName);
+    const fileKey = `${folder}/${safeName}_${Date.now()}${ext}`;
 
     // ── حالت لوکال: ذخیره روی دیسک کنار پروژه ──
     if (this.driver === 'local') {
