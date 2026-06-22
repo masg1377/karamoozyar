@@ -5,7 +5,7 @@ import { cn, generateTempId } from '@/lib/utils';
 import { useVoiceRecorder } from '@/hooks/useVoiceRecorder';
 import { getSocket } from '@/lib/socket-client';
 import api from '@/lib/api-client';
-import { SOCKET_EVENTS, FILE_LIMITS } from '@karamooziyar/shared';
+import { SOCKET_EVENTS, FILE_LIMITS, MessageType, MessageStatus } from '@karamooziyar/shared';
 import type { MessageDto } from '@karamooziyar/shared';
 import { useChatStore } from '@/store/chat.store';
 import { useAuthStore } from '@/store/auth.store';
@@ -154,9 +154,9 @@ export function MessageInput({
           conversationId,
           senderId: currentUser.id,
           senderName: `${currentUser.firstName} ${currentUser.lastName}`,
-          type: 'TEXT',
+          type: MessageType.TEXT,
           body,
-          status: 'SENT',
+          status: MessageStatus.SENT,
           isEdited: false,
           editedAt: null,
           deletedAt: null,
