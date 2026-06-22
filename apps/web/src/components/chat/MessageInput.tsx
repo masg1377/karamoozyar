@@ -7,6 +7,8 @@ import { getSocket } from '@/lib/socket-client';
 import api from '@/lib/api-client';
 import { SOCKET_EVENTS, FILE_LIMITS } from '@karamooziyar/shared';
 import type { MessageDto } from '@karamooziyar/shared';
+import { useChatStore } from '@/store/chat.store';
+import { useAuthStore } from '@/store/auth.store';
 import {
   Send, Mic, Paperclip, Image, X, Smile,
   Pause, Reply,
@@ -32,6 +34,8 @@ export function MessageInput({
   disabled,
 }: MessageInputProps) {
   const socket = getSocket();
+  const addMessage = useChatStore((s) => s.addMessage);
+  const currentUser = useAuthStore((s) => s.user);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
@@ -130,35 +134,68 @@ export function MessageInput({
     const body = text.trim();
     if (!body || sending) return;
 
-    if (!socket.connected) {
-      toast.error('اتصال برقرار نیست. لطفاً لحظه‌ای صبر کنید');
-      return;
-    }
-
-    if (mountedRef.current) setSending(true);
-    try {
-      if (editingMessage) {
-        socket.emit(SOCKET_EVENTS.CHAT_EDIT, { messageId: editingMessage.id, body });
-        onCancelEdit?.();
-      } else {
-        socket.emit(SOCKET_EVENTS.CHAT_SEND, {
+    // Socket.IO buffers emits automatically when disconnected and flushes on reconnect.
+    if (editingMessage) {
+      socket.emit(SOCKET_EVENTS.CHAT_EDIT, { messageId: editingMessage.id, body });
+      onCancelEdit?.();
+    } else {
+      const tempId = generateTempId();
+      socket.emit(SOCKET_EVENTS.CHAT_SEND, {
+        conversationId,
+        type: 'TEXT',
+        body,
+        tempId,
+        replyToMessageId: replyingTo?.id,
+      });
+      // Optimistic message — shown immediately with pending (clock) indicator
+      if (currentUser) {
+        addMessage(conversationId, {
+          id: tempId,
           conversationId,
+          senderId: currentUser.id,
+          senderName: `${currentUser.firstName} ${currentUser.lastName}`,
           type: 'TEXT',
           body,
-          tempId: generateTempId(),
-          replyToMessageId: replyingTo?.id,
+          status: 'SENT',
+          isEdited: false,
+          editedAt: null,
+          deletedAt: null,
+          pinnedAt: null,
+          attachment: null,
+          replyToMessage: replyingTo
+            ? {
+                id: replyingTo.id,
+                senderId: replyingTo.senderId,
+                senderName: replyingTo.senderName,
+                type: replyingTo.type,
+                body: replyingTo.body,
+                deletedAt: replyingTo.deletedAt,
+                attachment: replyingTo.attachment
+                  ? { fileName: replyingTo.attachment.fileName, mimeType: replyingTo.attachment.mimeType }
+                  : null,
+              }
+            : null,
+          createdAt: new Date().toISOString(),
+          pending: true,
         });
-        onCancelReply?.();
       }
-      if (mountedRef.current) {
-        setText('');
-        handleTyping(false);
-        if (textareaRef.current) textareaRef.current.style.height = 'auto';
-      }
-    } finally {
-      if (mountedRef.current) setSending(false);
+      onCancelReply?.();
+    }
+    if (mountedRef.current) {
+      setText('');
+      handleTyping(false);
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
     }
   };
+
+  /** Wait up to `ms` milliseconds for socket to connect; resolves true if connected in time */
+  const waitForSocket = (ms = 8000): Promise<boolean> =>
+    new Promise((resolve) => {
+      if (socket.connected) return resolve(true);
+      const timer = setTimeout(() => { socket.off('connect', onConnect); resolve(false); }, ms);
+      const onConnect = () => { clearTimeout(timer); resolve(true); };
+      socket.once('connect', onConnect);
+    });
 
   const sendFileMessage = async (file: File, type: 'IMAGE' | 'FILE') => {
     if (file.size > FILE_LIMITS.MAX_SIZE_BYTES) {
@@ -166,8 +203,10 @@ export function MessageInput({
       return;
     }
     if (!socket.connected) {
-      toast.error('اتصال برقرار نیست. لطفاً لحظه‌ای صبر کنید');
-      return;
+      toast.loading('در حال اتصال مجدد...', { id: 'reconnect' });
+      const ok = await waitForSocket();
+      toast.dismiss('reconnect');
+      if (!ok) { toast.error('اتصال برقرار نشد. دوباره امتحان کنید'); return; }
     }
     if (mountedRef.current) setSending(true);
     try {
@@ -179,11 +218,6 @@ export function MessageInput({
         { headers: { 'Content-Type': 'multipart/form-data' } },
       );
       const upload = res.data.data;
-      // After async upload, re-check connection before emitting
-      if (!socket.connected) {
-        toast.error('اتصال قطع شد. لطفاً دوباره ارسال کنید');
-        return;
-      }
       socket.emit(SOCKET_EVENTS.CHAT_SEND, {
         conversationId,
         type,
@@ -207,8 +241,10 @@ export function MessageInput({
     const recording = await stopRecording();
     if (!recording) return;
     if (!socket.connected) {
-      toast.error('اتصال برقرار نیست. لطفاً لحظه‌ای صبر کنید');
-      return;
+      toast.loading('در حال اتصال مجدد...', { id: 'reconnect' });
+      const ok = await waitForSocket();
+      toast.dismiss('reconnect');
+      if (!ok) { toast.error('اتصال برقرار نشد. دوباره امتحان کنید'); return; }
     }
     if (mountedRef.current) setSending(true);
     try {
@@ -221,10 +257,6 @@ export function MessageInput({
         { headers: { 'Content-Type': 'multipart/form-data' } },
       );
       const upload = res.data.data;
-      if (!socket.connected) {
-        toast.error('اتصال قطع شد. لطفاً دوباره ارسال کنید');
-        return;
-      }
       socket.emit(SOCKET_EVENTS.CHAT_SEND, {
         conversationId,
         type: 'VOICE',

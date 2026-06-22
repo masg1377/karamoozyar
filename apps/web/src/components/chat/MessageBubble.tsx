@@ -6,8 +6,9 @@ import { cn, formatTime, formatFileSize, isImageMime, isVoiceMime } from '@/lib/
 import type { MessageDto } from '@karamooziyar/shared';
 import {
   Check, CheckCheck, Copy, Trash2, Pencil, Download,
-  Play, Pause, FileText, Reply, Pin, PinOff,
+  Play, Pause, FileText, Reply, Pin, PinOff, Clock,
 } from 'lucide-react';
+import type { ChatMessage } from '@/store/chat.store';
 import { toast } from 'sonner';
 import { useSwipeToReply } from '@/hooks/useSwipeToReply';
 import { UserAvatar } from '@/components/shared/UserAvatar';
@@ -178,9 +179,10 @@ export function MessageBubble({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const replyIconRef = useRef<HTMLDivElement>(null);
 
-  const canCopy  = message.type === 'TEXT' && !!message.body;
-  const canEdit  = isMine && message.type === 'TEXT' && !!onEdit;
-  const canDelete = !!onDelete;
+  const isPending = !!(message as ChatMessage).pending;
+  const canCopy  = !isPending && message.type === 'TEXT' && !!message.body;
+  const canEdit  = !isPending && isMine && message.type === 'TEXT' && !!onEdit;
+  const canDelete = !isPending && !!onDelete;
   const canReply = !!onReply;
   const isPinned = !!message.pinnedAt;
   const canPin   = !isPinned && !!onPin;
@@ -350,7 +352,12 @@ export function MessageBubble({
               <span className={cn('text-xs', isMine ? 'text-white/60' : 'text-gray-400')}>{formatTime(message.createdAt)}</span>
               {isMine && (
                 <span className="text-white/70">
-                  {message.status === 'SEEN' ? <CheckCheck className="w-3.5 h-3.5 inline" /> : <Check className="w-3.5 h-3.5 inline" />}
+                  {isPending
+                    ? <Clock className="w-3 h-3 inline opacity-70" />
+                    : message.status === 'SEEN'
+                      ? <CheckCheck className="w-3.5 h-3.5 inline" />
+                      : <Check className="w-3.5 h-3.5 inline" />
+                  }
                 </span>
               )}
             </div>

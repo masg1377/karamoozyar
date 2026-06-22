@@ -8,7 +8,7 @@ import type { CursorPaginatedResponse, MessageDto, ConversationSummaryDto } from
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 
 export function useMessages(conversationId: string) {
-  const { messages, hasMore, nextCursor, setMessages, prependMessages, addMessage, updateMessage, removeMessage, setTyping } =
+  const { messages, hasMore, nextCursor, setMessages, prependMessages, addMessage, replacePendingMessage, updateMessage, removeMessage, setTyping } =
     useChatStore();
   const socket = getSocket();
   const isInitialized = useRef(false);
@@ -58,8 +58,14 @@ export function useMessages(conversationId: string) {
     void loadInitial();
 
     // Socket listeners
-    const onNewMessage = (msg: MessageDto) => {
-      if (msg.conversationId === conversationId) addMessage(conversationId, msg);
+    const onNewMessage = (msg: MessageDto & { tempId?: string }) => {
+      if (msg.conversationId !== conversationId) return;
+      if (msg.tempId) {
+        // Replace the optimistic pending message with the confirmed one
+        replacePendingMessage(conversationId, msg.tempId, msg);
+      } else {
+        addMessage(conversationId, msg);
+      }
     };
     const onUpdated = (data: { messageId: string; body: string; editedAt: string }) => {
       updateMessage(conversationId, data.messageId, { body: data.body, isEdited: true, editedAt: data.editedAt });
@@ -70,11 +76,17 @@ export function useMessages(conversationId: string) {
     const onTyping = (data: { conversationId: string; userId: string; isTyping: boolean }) => {
       if (data.conversationId === conversationId) setTyping(conversationId, data.userId, data.isTyping);
     };
+    // On reconnect: rejoin room and reload messages to catch anything missed during disconnect
+    const onReconnect = () => {
+      socket.emit(SOCKET_EVENTS.CHAT_JOIN, { conversationId });
+      void loadInitial();
+    };
 
     socket.on(SOCKET_EVENTS.CHAT_MESSAGE_NEW, onNewMessage);
     socket.on(SOCKET_EVENTS.CHAT_MESSAGE_UPDATED, onUpdated);
     socket.on(SOCKET_EVENTS.CHAT_MESSAGE_DELETED, onDeleted);
     socket.on(SOCKET_EVENTS.CHAT_TYPING, onTyping);
+    socket.on('connect', onReconnect);
 
     return () => {
       isInitialized.current = false;
@@ -83,8 +95,9 @@ export function useMessages(conversationId: string) {
       socket.off(SOCKET_EVENTS.CHAT_MESSAGE_UPDATED, onUpdated);
       socket.off(SOCKET_EVENTS.CHAT_MESSAGE_DELETED, onDeleted);
       socket.off(SOCKET_EVENTS.CHAT_TYPING, onTyping);
+      socket.off('connect', onReconnect);
     };
-  }, [conversationId, socket, loadInitial, addMessage, updateMessage, removeMessage, setTyping]);
+  }, [conversationId, socket, loadInitial, addMessage, replacePendingMessage, updateMessage, removeMessage, setTyping]);
 
   return { messages: msgs, canLoadMore, loadMore, isLoadingMore };
 }

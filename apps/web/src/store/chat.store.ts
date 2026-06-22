@@ -3,19 +3,24 @@
 import { create } from 'zustand';
 import type { MessageDto, ConversationSummaryDto } from '@karamooziyar/shared';
 
+// Extends MessageDto with client-only `pending` flag for optimistic sends
+export type ChatMessage = MessageDto & { pending?: boolean };
+
 interface ChatState {
   conversations: ConversationSummaryDto[];
-  messages: Record<string, MessageDto[]>; // conversationId → messages
+  messages: Record<string, ChatMessage[]>; // conversationId → messages
   typingUsers: Record<string, Set<string>>; // conversationId → userIds typing
   hasMore: Record<string, boolean>;
   nextCursor: Record<string, string | null>;
 
   setConversations: (convs: ConversationSummaryDto[]) => void;
   updateConversation: (conv: ConversationSummaryDto) => void;
-  setMessages: (conversationId: string, msgs: MessageDto[], nextCursor: string | null) => void;
-  prependMessages: (conversationId: string, msgs: MessageDto[], nextCursor: string | null) => void;
-  addMessage: (conversationId: string, msg: MessageDto) => void;
-  updateMessage: (conversationId: string, messageId: string, patch: Partial<MessageDto>) => void;
+  setMessages: (conversationId: string, msgs: ChatMessage[], nextCursor: string | null) => void;
+  prependMessages: (conversationId: string, msgs: ChatMessage[], nextCursor: string | null) => void;
+  addMessage: (conversationId: string, msg: ChatMessage) => void;
+  /** Replace the optimistic pending message (id === tempId) with the confirmed message from server */
+  replacePendingMessage: (conversationId: string, tempId: string, msg: ChatMessage) => void;
+  updateMessage: (conversationId: string, messageId: string, patch: Partial<ChatMessage>) => void;
   removeMessage: (conversationId: string, messageId: string) => void;
   setTyping: (conversationId: string, userId: string, isTyping: boolean) => void;
 }
@@ -38,7 +43,6 @@ export const useChatStore = create<ChatState>((set) => ({
       } else {
         updated.unshift(conv);
       }
-      // Re-sort by lastMessageAt desc
       updated.sort((a, b) => {
         if (!a.lastMessageAt) return 1;
         if (!b.lastMessageAt) return -1;
@@ -71,6 +75,20 @@ export const useChatStore = create<ChatState>((set) => ({
         [conversationId]: [...(state.messages[conversationId] ?? []), msg],
       },
     })),
+
+  replacePendingMessage: (conversationId, tempId, msg) =>
+    set((state) => {
+      const list = state.messages[conversationId] ?? [];
+      const idx = list.findIndex((m) => m.id === tempId);
+      if (idx >= 0) {
+        // Replace in-place so the message doesn't jump
+        const updated = [...list];
+        updated[idx] = { ...msg, pending: false };
+        return { messages: { ...state.messages, [conversationId]: updated } };
+      }
+      // No pending match — just append (e.g. received from other session)
+      return { messages: { ...state.messages, [conversationId]: [...list, msg] } };
+    }),
 
   updateMessage: (conversationId, messageId, patch) =>
     set((state) => ({
