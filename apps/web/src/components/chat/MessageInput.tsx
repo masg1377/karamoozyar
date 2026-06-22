@@ -41,6 +41,18 @@ export function MessageInput({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
+  // Guard: prevent setState after unmount
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      // Clear typing timer and notify server on unmount
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      socket.emit(SOCKET_EVENTS.CHAT_TYPING_STOP, { conversationId });
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
 
   // Close emoji picker on outside click / touch
   useEffect(() => {
@@ -98,7 +110,7 @@ export function MessageInput({
 
   const handleTyping = useCallback((typing: boolean) => {
     if (typing !== isTyping) {
-      setIsTyping(typing);
+      if (mountedRef.current) setIsTyping(typing);
       socket.emit(
         typing ? SOCKET_EVENTS.CHAT_TYPING_START : SOCKET_EVENTS.CHAT_TYPING_STOP,
         { conversationId },
@@ -107,6 +119,7 @@ export function MessageInput({
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     if (typing) {
       typingTimerRef.current = setTimeout(() => {
+        if (!mountedRef.current) return;
         setIsTyping(false);
         socket.emit(SOCKET_EVENTS.CHAT_TYPING_STOP, { conversationId });
       }, 2000);
@@ -117,7 +130,12 @@ export function MessageInput({
     const body = text.trim();
     if (!body || sending) return;
 
-    setSending(true);
+    if (!socket.connected) {
+      toast.error('اتصال برقرار نیست. لطفاً لحظه‌ای صبر کنید');
+      return;
+    }
+
+    if (mountedRef.current) setSending(true);
     try {
       if (editingMessage) {
         socket.emit(SOCKET_EVENTS.CHAT_EDIT, { messageId: editingMessage.id, body });
@@ -132,14 +150,13 @@ export function MessageInput({
         });
         onCancelReply?.();
       }
-      setText('');
-      handleTyping(false);
-      // Reset textarea height
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
+      if (mountedRef.current) {
+        setText('');
+        handleTyping(false);
+        if (textareaRef.current) textareaRef.current.style.height = 'auto';
       }
     } finally {
-      setSending(false);
+      if (mountedRef.current) setSending(false);
     }
   };
 
@@ -148,7 +165,11 @@ export function MessageInput({
       toast.error(`حداکثر حجم فایل ${FILE_LIMITS.MAX_SIZE_MB} مگابایت است`);
       return;
     }
-    setSending(true);
+    if (!socket.connected) {
+      toast.error('اتصال برقرار نیست. لطفاً لحظه‌ای صبر کنید');
+      return;
+    }
+    if (mountedRef.current) setSending(true);
     try {
       const form = new FormData();
       form.append('file', file);
@@ -158,6 +179,11 @@ export function MessageInput({
         { headers: { 'Content-Type': 'multipart/form-data' } },
       );
       const upload = res.data.data;
+      // After async upload, re-check connection before emitting
+      if (!socket.connected) {
+        toast.error('اتصال قطع شد. لطفاً دوباره ارسال کنید');
+        return;
+      }
       socket.emit(SOCKET_EVENTS.CHAT_SEND, {
         conversationId,
         type,
@@ -168,19 +194,23 @@ export function MessageInput({
         tempId: generateTempId(),
         replyToMessageId: replyingTo?.id,
       });
-      onCancelReply?.();
+      if (mountedRef.current) onCancelReply?.();
       toast.success('فایل ارسال شد');
     } catch {
       toast.error('ارسال فایل ناموفق بود');
     } finally {
-      setSending(false);
+      if (mountedRef.current) setSending(false);
     }
   };
 
   const sendVoiceMessage = async () => {
     const recording = await stopRecording();
     if (!recording) return;
-    setSending(true);
+    if (!socket.connected) {
+      toast.error('اتصال برقرار نیست. لطفاً لحظه‌ای صبر کنید');
+      return;
+    }
+    if (mountedRef.current) setSending(true);
     try {
       const file = new File([recording.blob], `voice_${Date.now()}.ogg`, { type: recording.mimeType });
       const form = new FormData();
@@ -191,6 +221,10 @@ export function MessageInput({
         { headers: { 'Content-Type': 'multipart/form-data' } },
       );
       const upload = res.data.data;
+      if (!socket.connected) {
+        toast.error('اتصال قطع شد. لطفاً دوباره ارسال کنید');
+        return;
+      }
       socket.emit(SOCKET_EVENTS.CHAT_SEND, {
         conversationId,
         type: 'VOICE',
@@ -201,11 +235,11 @@ export function MessageInput({
         tempId: generateTempId(),
         replyToMessageId: replyingTo?.id,
       });
-      onCancelReply?.();
+      if (mountedRef.current) onCancelReply?.();
     } catch {
       toast.error('ارسال پیام صوتی ناموفق بود');
     } finally {
-      setSending(false);
+      if (mountedRef.current) setSending(false);
     }
   };
 
