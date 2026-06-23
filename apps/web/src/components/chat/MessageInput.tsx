@@ -66,7 +66,7 @@ export function MessageInput({
 
   /**
    * Called after each text send.
-   * Waits 8 s; if the message is still pending, soft-reconnects the socket
+   * Waits 5 s; if the message is still pending, soft-reconnects the socket
    * (same instance → all useMessages listeners survive) and resends all
    * stuck payloads.  Runs entirely in the background; safe if unmounted.
    */
@@ -76,7 +76,7 @@ export function MessageInput({
       if (!mountedRef.current) return;
 
       const msgs = useChatStore.getState().messages[conversationId] ?? [];
-      const stillPending = msgs.some((m) => m.id === tempId && (m as { pending?: boolean }).pending);
+      const stillPending = msgs.some((m) => m.id === tempId && m.pending);
       if (!stillPending) { pendingPayloadsRef.current.delete(tempId); return; }
 
       // Resend all stuck payloads after (re)connect
@@ -84,12 +84,13 @@ export function MessageInput({
         if (!mountedRef.current) return;
         const latest = useChatStore.getState().messages[conversationId] ?? [];
         for (const [tid, entry] of pendingPayloadsRef.current) {
-          const isStillPending = latest.some((m) => m.id === tid && (m as { pending?: boolean }).pending);
+          const isStillPending = latest.some((m) => m.id === tid && m.pending);
+          pendingPayloadsRef.current.delete(tid);
           if (isStillPending) {
             getSocket().emit(SOCKET_EVENTS.CHAT_SEND, entry.payload);
+            // Schedule another check in case this resend also gets stuck
+            scheduleStuckCheck(tid, entry.payload);
           }
-          clearTimeout(entry.timer);
-          pendingPayloadsRef.current.delete(tid);
         }
       };
 
@@ -242,13 +243,15 @@ export function MessageInput({
   /** Wait up to `ms` milliseconds for socket to connect; resolves true if connected in time */
   const waitForSocket = (ms = 5000): Promise<boolean> =>
     new Promise((resolve) => {
-      if (socket.connected) return resolve(true);
-      const timer = setTimeout(() => { socket.off('connect', onConnect); resolve(false); }, ms);
+      const sock = getSocket();
+      if (sock.connected) return resolve(true);
       const onConnect = () => { clearTimeout(timer); resolve(true); };
-      socket.once('connect', onConnect);
+      const timer = setTimeout(() => { sock.off('connect', onConnect); resolve(false); }, ms);
+      sock.once('connect', onConnect);
+      if (!sock.active) sock.connect();
     });
 
-  const sendFileMessage = async (file: File, type: 'IMAGE' | 'FILE') => {
+  const sendFileMessage = async (file: File, type: MessageType.IMAGE | MessageType.FILE) => {
     if (file.size > FILE_LIMITS.MAX_SIZE_BYTES) {
       toast.error(`حداکثر حجم فایل ${FILE_LIMITS.MAX_SIZE_MB} مگابایت است`);
       return;
@@ -487,7 +490,7 @@ export function MessageInput({
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
-          if (file) void sendFileMessage(file, 'IMAGE');
+          if (file) void sendFileMessage(file, MessageType.IMAGE);
           e.target.value = '';
         }}
       />
@@ -498,7 +501,7 @@ export function MessageInput({
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
-          if (file) void sendFileMessage(file, 'FILE');
+          if (file) void sendFileMessage(file, MessageType.FILE);
           e.target.value = '';
         }}
       />
