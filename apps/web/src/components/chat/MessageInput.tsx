@@ -47,16 +47,65 @@ export function MessageInput({
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   // Guard: prevent setState after unmount
   const mountedRef = useRef(true);
+  // Map of tempId → { payload, timer } for stuck-pending detection
+  const pendingPayloadsRef = useRef<Map<string, { payload: object; timer: ReturnType<typeof setTimeout> }>>(new Map());
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      // Clear typing timer and notify server on unmount
+      // Cancel all stuck-pending timers on unmount
+      pendingPayloadsRef.current.forEach(({ timer }) => clearTimeout(timer));
+      pendingPayloadsRef.current.clear();
+      // Clear typing timer and notify server
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       socket.emit(SOCKET_EVENTS.CHAT_TYPING_STOP, { conversationId });
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
+
+  /**
+   * Called after each text send.
+   * Waits 8 s; if the message is still pending, soft-reconnects the socket
+   * (same instance → all useMessages listeners survive) and resends all
+   * stuck payloads.  Runs entirely in the background; safe if unmounted.
+   */
+  const scheduleStuckCheck = (tempId: string, payload: object) => {
+    const timer = setTimeout(() => {
+      // Bail if navigated away
+      if (!mountedRef.current) return;
+
+      const msgs = useChatStore.getState().messages[conversationId] ?? [];
+      const stillPending = msgs.some((m) => m.id === tempId && (m as { pending?: boolean }).pending);
+      if (!stillPending) { pendingPayloadsRef.current.delete(tempId); return; }
+
+      // Resend all stuck payloads after (re)connect
+      const doResend = () => {
+        if (!mountedRef.current) return;
+        const latest = useChatStore.getState().messages[conversationId] ?? [];
+        for (const [tid, entry] of pendingPayloadsRef.current) {
+          const isStillPending = latest.some((m) => m.id === tid && (m as { pending?: boolean }).pending);
+          if (isStillPending) {
+            getSocket().emit(SOCKET_EVENTS.CHAT_SEND, entry.payload);
+          }
+          clearTimeout(entry.timer);
+          pendingPayloadsRef.current.delete(tid);
+        }
+      };
+
+      const sock = getSocket();
+      if (sock.connected) {
+        // Socket thinks it's connected but message didn't confirm — emit again directly
+        doResend();
+      } else {
+        // Soft reconnect: same socket instance, listeners preserved
+        sock.once('connect', doResend);
+        if (!sock.active) sock.connect();
+      }
+    }, 5000);
+
+    pendingPayloadsRef.current.set(tempId, { payload, timer });
+  };
 
   // Close emoji picker on outside click / touch
   useEffect(() => {
@@ -140,13 +189,15 @@ export function MessageInput({
       onCancelEdit?.();
     } else {
       const tempId = generateTempId();
-      socket.emit(SOCKET_EVENTS.CHAT_SEND, {
+      const sendPayload = {
         conversationId,
-        type: 'TEXT',
+        type: MessageType.TEXT,
         body,
         tempId,
         replyToMessageId: replyingTo?.id,
-      });
+      };
+      socket.emit(SOCKET_EVENTS.CHAT_SEND, sendPayload);
+      scheduleStuckCheck(tempId, sendPayload);
       // Optimistic message — shown immediately with pending (clock) indicator
       if (currentUser) {
         addMessage(conversationId, {
@@ -155,7 +206,7 @@ export function MessageInput({
           senderId: currentUser.id,
           senderName: `${currentUser.firstName} ${currentUser.lastName}`,
           type: MessageType.TEXT,
-          body,
+          body: body,
           status: MessageStatus.SENT,
           isEdited: false,
           editedAt: null,
@@ -189,7 +240,7 @@ export function MessageInput({
   };
 
   /** Wait up to `ms` milliseconds for socket to connect; resolves true if connected in time */
-  const waitForSocket = (ms = 8000): Promise<boolean> =>
+  const waitForSocket = (ms = 5000): Promise<boolean> =>
     new Promise((resolve) => {
       if (socket.connected) return resolve(true);
       const timer = setTimeout(() => { socket.off('connect', onConnect); resolve(false); }, ms);
@@ -259,7 +310,7 @@ export function MessageInput({
       const upload = res.data.data;
       socket.emit(SOCKET_EVENTS.CHAT_SEND, {
         conversationId,
-        type: 'VOICE',
+        type: MessageType.VOICE,
         fileKey: upload.fileKey,
         fileName: upload.fileName,
         mimeType: upload.mimeType,
