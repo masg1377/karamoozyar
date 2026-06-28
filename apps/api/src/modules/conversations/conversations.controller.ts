@@ -81,14 +81,16 @@ export class ConversationsController {
     @Body() body: SendMessageInput,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.conversationsService.sendMessage(
-      id,
-      user.sub,
-      user.role,
-      body.body,
-      body.type,
-      body.fileKey,
-    );
+    const { message } = await this.conversationsService.sendMessage({
+      conversationId: id,
+      senderId: user.sub,
+      senderRole: user.role,
+      clientMessageId: body.clientMessageId,
+      body: body.body,
+      type: body.type,
+      replyToMessageId: body.replyToMessageId,
+    });
+    return message;
   }
 
   // Edit a message

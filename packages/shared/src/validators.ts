@@ -92,11 +92,15 @@ export const SendMessageSchema = z.object({
   body: z.string().min(1).max(4000).optional(),
   type: z.nativeEnum(MessageType).default(MessageType.TEXT),
   fileKey: z.string().optional(),
-  tempId: z.string().min(1),
+  // Stable client identity + idempotency key (UUID-ish). tempId kept as alias.
+  clientMessageId: z.string().min(8).max(64),
+  tempId: z.string().min(1).optional(),
   replyToMessageId: z.string().optional(),
   fileName: z.string().optional(),
   mimeType: z.string().optional(),
-  fileSize: z.number().optional(),
+  fileSize: z.number().int().nonnegative().optional(),
+  // Client-reported media duration (seconds). Server clamps to a sane range.
+  duration: z.number().int().nonnegative().max(36000).optional(),
 });
 
 export const EditMessageSchema = z.object({

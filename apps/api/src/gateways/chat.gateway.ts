@@ -146,47 +146,64 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   async handleSendMessage(
     @ConnectedSocket() client: AuthSocket,
     @MessageBody() payload: SocketChatSendPayload,
-  ): Promise<void> {
-    if (!client.user) return;
+  ): Promise<import('@karamooziyar/shared').SocketChatSendAck> {
+    const clientMessageId = payload.clientMessageId ?? payload.tempId ?? '';
+    if (!client.user) {
+      return { ok: false, clientMessageId, code: 'FORBIDDEN', error: 'unauthenticated' };
+    }
     const { sub: senderId, role } = client.user;
 
+    // Structured correlation log — no message body (privacy).
+    this.logger.log(
+      `chat:send conv=${payload.conversationId} sender=${senderId} type=${payload.type} cid=${clientMessageId}`,
+    );
+
+    if (!clientMessageId || clientMessageId.length < 8) {
+      return { ok: false, clientMessageId, code: 'VALIDATION', error: 'missing clientMessageId' };
+    }
+
     try {
-      const message = await this.conversationsService.sendMessage(
-        payload.conversationId,
+      // Build the durable attachment (stable, non-expiring URL) up front so the
+      // message + attachment are persisted atomically inside sendMessage.
+      const attachment = payload.fileKey
+        ? {
+            fileKey: payload.fileKey,
+            fileUrl: this.uploadsService.buildPublicUrl(payload.fileKey, payload.fileName),
+            fileName: payload.fileName ?? payload.fileKey.split('/').pop() ?? 'file',
+            mimeType: payload.mimeType ?? 'application/octet-stream',
+            fileSize: payload.fileSize ?? 0,
+            // Trust client duration only for audio/video; clamp via validator upstream.
+            duration:
+              payload.type === 'VOICE' && typeof payload.duration === 'number'
+                ? payload.duration
+                : null,
+          }
+        : undefined;
+
+      const { message, deduped } = await this.conversationsService.sendMessage({
+        conversationId: payload.conversationId,
         senderId,
-        role,
-        payload.body,
-        payload.type,
-        payload.fileKey,
-        payload.replyToMessageId,
-      );
-
-      // If a file was attached, persist it and get back the full AttachmentDto
-      // so the broadcast includes real metadata (not placeholder values)
-      let attachmentDto: import('@karamooziyar/shared').AttachmentDto | null = null;
-      if (payload.fileKey) {
-        const presignedUrl = await this.uploadsService.getPresignedUrl(payload.fileKey);
-        attachmentDto = await this.conversationsService.linkAttachmentToMessage(message.id, {
-          fileKey: payload.fileKey,
-          fileUrl: presignedUrl,
-          // Use metadata sent by the client; fall back to safe defaults
-          fileName: payload.fileName ?? payload.fileKey.split('/').pop() ?? 'file',
-          mimeType: payload.mimeType ?? 'application/octet-stream',
-          fileSize: payload.fileSize ?? 0,
-          duration: null,
-        });
-      }
-
-      // Broadcast the complete message (attachment included) to the conversation room
-      const room = SOCKET_ROOMS.conversation(payload.conversationId);
-      this.server.to(room).emit(SOCKET_EVENTS.CHAT_MESSAGE_NEW, {
-        ...message,
-        attachment: attachmentDto ?? message.attachment,
-        tempId: payload.tempId,
+        senderRole: role,
+        clientMessageId,
+        body: payload.body,
+        type: payload.type,
+        replyToMessageId: payload.replyToMessageId,
+        attachment,
       });
 
+      // A duplicate (retry / reconnect replay) is already broadcast and counted.
+      // Just ack the sender so its optimistic item reconciles — no second
+      // broadcast, no double unread/notification.
+      if (deduped) {
+        return { ok: true, clientMessageId, message };
+      }
+
+      // Broadcast to the room EXCLUDING the sender — the sender reconciles via
+      // this ack, so it never receives a duplicate echo of its own message.
+      const room = SOCKET_ROOMS.conversation(payload.conversationId);
+      client.to(room).emit(SOCKET_EVENTS.CHAT_MESSAGE_NEW, message);
+
       // Update admin's conversation list
-      // USER: find/create by userId | ADMIN: look up by conversationId directly
       const conv = role === 'USER'
         ? await this.conversationsService.findForUser(senderId)
         : await this.conversationsService.findOneById(payload.conversationId);
@@ -194,10 +211,9 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
       // ── Notify the receiving side (in-app + web push) ──────────────────────
       const preview = this.messagePreview(payload.type, payload.body);
-      const createdAt = new Date().toISOString();
+      const createdAt = message.createdAt;
 
       if (role === 'USER') {
-        // Trainee → all admins
         const href = `/admin/conversations/${payload.conversationId}`;
         this.server.to(SOCKET_ROOMS.admin()).emit(SOCKET_EVENTS.NOTIFICATION_NEW, {
           type: 'message',
@@ -211,10 +227,8 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           .sendToAdmins({ title: message.senderName, body: preview, url: href, tag: `conv-${payload.conversationId}` })
           .catch((err) => this.logger.warn(`Push to admins failed: ${String(err)}`));
       } else {
-        // Admin → the conversation's trainee
         const recipientId = 'user' in conv ? conv.user.id : conv.userId;
         const userRoom = SOCKET_ROOMS.user(recipientId);
-        // Keep the trainee's conversation badge in sync app-wide
         this.server.to(userRoom).emit(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, conv);
         this.server.to(userRoom).emit(SOCKET_EVENTS.NOTIFICATION_NEW, {
           type: 'message',
@@ -228,8 +242,35 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           .sendToUser(recipientId, { title: 'مدیریت مرکز', body: preview, url: '/chat', tag: `conv-${payload.conversationId}` })
           .catch((err) => this.logger.warn(`Push to user failed: ${String(err)}`));
       }
+
+      // Durable success ack — only returned AFTER the transaction committed.
+      return { ok: true, clientMessageId, message };
     } catch (err) {
-      client.emit(SOCKET_EVENTS.CHAT_ERROR, { message: (err as Error).message });
+      // Surface a typed, non-fatal failure to the sender (kept visible + retryable);
+      // do NOT emit CHAT_ERROR for sends — that path is for global UI errors.
+      this.logger.warn(`chat:send failed cid=${clientMessageId}: ${(err as Error).message}`);
+      const code = this.classifySendError(err);
+      return { ok: false, clientMessageId, code, error: this.safeErrorMessage(code) };
+    }
+  }
+
+  /** Map an internal error to a typed, client-safe send error code. */
+  private classifySendError(err: unknown): import('@karamooziyar/shared').SocketChatSendErrorCode {
+    const name = (err as { constructor?: { name?: string } })?.constructor?.name ?? '';
+    if (name === 'ForbiddenException') return 'FORBIDDEN';
+    if (name === 'NotFoundException') return 'NOT_FOUND';
+    if (name === 'BadRequestException') return 'VALIDATION';
+    return 'INTERNAL';
+  }
+
+  /** User-safe Persian message per code — never leaks internals/stack/keys. */
+  private safeErrorMessage(code: import('@karamooziyar/shared').SocketChatSendErrorCode): string {
+    switch (code) {
+      case 'FORBIDDEN': return 'دسترسی غیرمجاز';
+      case 'NOT_FOUND': return 'گفتگو یافت نشد';
+      case 'VALIDATION': return 'داده نامعتبر است';
+      case 'ATTACHMENT': return 'بارگذاری فایل ناموفق بود';
+      default: return 'ارسال پیام ناموفق بود';
     }
   }
 

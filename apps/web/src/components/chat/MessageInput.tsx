@@ -1,14 +1,13 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { cn, generateTempId } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { useVoiceRecorder } from '@/hooks/useVoiceRecorder';
 import { getSocket } from '@/lib/socket-client';
-import api from '@/lib/api-client';
-import { SOCKET_EVENTS, FILE_LIMITS, MessageType, MessageStatus } from '@karamooziyar/shared';
+import { SOCKET_EVENTS, FILE_LIMITS, MessageType } from '@karamooziyar/shared';
 import type { MessageDto } from '@karamooziyar/shared';
-import { useChatStore } from '@/store/chat.store';
 import { useAuthStore } from '@/store/auth.store';
+import { sendText, sendMedia, voiceFileFromBlob } from '@/lib/outbox';
 import {
   Send, Mic, Paperclip, Image, X, Smile,
   Pause, Reply,
@@ -34,10 +33,8 @@ export function MessageInput({
   disabled,
 }: MessageInputProps) {
   const socket = getSocket();
-  const addMessage = useChatStore((s) => s.addMessage);
   const currentUser = useAuthStore((s) => s.user);
   const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -47,66 +44,17 @@ export function MessageInput({
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   // Guard: prevent setState after unmount
   const mountedRef = useRef(true);
-  // Map of tempId → { payload, timer } for stuck-pending detection
-  const pendingPayloadsRef = useRef<Map<string, { payload: object; timer: ReturnType<typeof setTimeout> }>>(new Map());
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      // Cancel all stuck-pending timers on unmount
-      pendingPayloadsRef.current.forEach(({ timer }) => clearTimeout(timer));
-      pendingPayloadsRef.current.clear();
       // Clear typing timer and notify server
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       socket.emit(SOCKET_EVENTS.CHAT_TYPING_STOP, { conversationId });
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
-
-  /**
-   * Called after each text send.
-   * Waits 5 s; if the message is still pending, soft-reconnects the socket
-   * (same instance → all useMessages listeners survive) and resends all
-   * stuck payloads.  Runs entirely in the background; safe if unmounted.
-   */
-  const scheduleStuckCheck = (tempId: string, payload: object) => {
-    const timer = setTimeout(() => {
-      // Bail if navigated away
-      if (!mountedRef.current) return;
-
-      const msgs = useChatStore.getState().messages[conversationId] ?? [];
-      const stillPending = msgs.some((m) => m.id === tempId && m.pending);
-      if (!stillPending) { pendingPayloadsRef.current.delete(tempId); return; }
-
-      // Resend all stuck payloads after (re)connect
-      const doResend = () => {
-        if (!mountedRef.current) return;
-        const latest = useChatStore.getState().messages[conversationId] ?? [];
-        for (const [tid, entry] of pendingPayloadsRef.current) {
-          const isStillPending = latest.some((m) => m.id === tid && m.pending);
-          pendingPayloadsRef.current.delete(tid);
-          if (isStillPending) {
-            getSocket().emit(SOCKET_EVENTS.CHAT_SEND, entry.payload);
-            // Schedule another check in case this resend also gets stuck
-            scheduleStuckCheck(tid, entry.payload);
-          }
-        }
-      };
-
-      const sock = getSocket();
-      if (sock.connected) {
-        // Socket thinks it's connected but message didn't confirm — emit again directly
-        doResend();
-      } else {
-        // Soft reconnect: same socket instance, listeners preserved
-        sock.once('connect', doResend);
-        if (!sock.active) sock.connect();
-      }
-    }, 5000);
-
-    pendingPayloadsRef.current.set(tempId, { payload, timer });
-  };
 
   // Close emoji picker on outside click / touch
   useEffect(() => {
@@ -180,59 +128,26 @@ export function MessageInput({
     }
   }, [isTyping, conversationId, socket]);
 
-  const sendTextMessage = async () => {
+  const sendTextMessage = () => {
     const body = text.trim();
-    if (!body || sending) return;
+    if (!body) return;
 
-    // Socket.IO buffers emits automatically when disconnected and flushes on reconnect.
     if (editingMessage) {
+      // Edits go straight to the server (the message already exists durably).
       socket.emit(SOCKET_EVENTS.CHAT_EDIT, { messageId: editingMessage.id, body });
       onCancelEdit?.();
-    } else {
-      const tempId = generateTempId();
-      const sendPayload = {
+    } else if (currentUser) {
+      // Outbox owns the optimistic insert + delivery state + ack/retry. The
+      // message appears instantly and stays visible until durably confirmed.
+      sendText({
         conversationId,
-        type: MessageType.TEXT,
         body,
-        tempId,
-        replyToMessageId: replyingTo?.id,
-      };
-      socket.emit(SOCKET_EVENTS.CHAT_SEND, sendPayload);
-      scheduleStuckCheck(tempId, sendPayload);
-      // Optimistic message — shown immediately with pending (clock) indicator
-      if (currentUser) {
-        addMessage(conversationId, {
-          id: tempId,
-          conversationId,
-          senderId: currentUser.id,
-          senderName: `${currentUser.firstName} ${currentUser.lastName}`,
-          type: MessageType.TEXT,
-          body: body,
-          status: MessageStatus.SENT,
-          isEdited: false,
-          editedAt: null,
-          deletedAt: null,
-          pinnedAt: null,
-          attachment: null,
-          replyToMessage: replyingTo
-            ? {
-                id: replyingTo.id,
-                senderId: replyingTo.senderId,
-                senderName: replyingTo.senderName,
-                type: replyingTo.type,
-                body: replyingTo.body,
-                deletedAt: replyingTo.deletedAt,
-                attachment: replyingTo.attachment
-                  ? { fileName: replyingTo.attachment.fileName, mimeType: replyingTo.attachment.mimeType }
-                  : null,
-              }
-            : null,
-          createdAt: new Date().toISOString(),
-          pending: true,
-        });
-      }
+        sender: { id: currentUser.id, firstName: currentUser.firstName, lastName: currentUser.lastName },
+        replyTo: replyingTo ?? null,
+      });
       onCancelReply?.();
     }
+
     if (mountedRef.current) {
       setText('');
       handleTyping(false);
@@ -240,93 +155,39 @@ export function MessageInput({
     }
   };
 
-  /** Wait up to `ms` milliseconds for socket to connect; resolves true if connected in time */
-  const waitForSocket = (ms = 5000): Promise<boolean> =>
-    new Promise((resolve) => {
-      const sock = getSocket();
-      if (sock.connected) return resolve(true);
-      const onConnect = () => { clearTimeout(timer); resolve(true); };
-      const timer = setTimeout(() => { sock.off('connect', onConnect); resolve(false); }, ms);
-      sock.once('connect', onConnect);
-      if (!sock.active) sock.connect();
-    });
-
-  const sendFileMessage = async (file: File, type: MessageType.IMAGE | MessageType.FILE) => {
+  const sendFileMessage = (file: File, type: MessageType.IMAGE | MessageType.FILE) => {
     if (file.size > FILE_LIMITS.MAX_SIZE_BYTES) {
       toast.error(`حداکثر حجم فایل ${FILE_LIMITS.MAX_SIZE_MB} مگابایت است`);
       return;
     }
-    if (!socket.connected) {
-      toast.loading('در حال اتصال مجدد...', { id: 'reconnect' });
-      const ok = await waitForSocket();
-      toast.dismiss('reconnect');
-      if (!ok) { toast.error('اتصال برقرار نشد. دوباره امتحان کنید'); return; }
-    }
-    if (mountedRef.current) setSending(true);
-    try {
-      const form = new FormData();
-      form.append('file', file);
-      const res = await api.post<{ data: import('@karamooziyar/shared').UploadResponseDto }>(
-        `/uploads/message-attachment?conversationId=${conversationId}`,
-        form,
-        { headers: { 'Content-Type': 'multipart/form-data' } },
-      );
-      const upload = res.data.data;
-      socket.emit(SOCKET_EVENTS.CHAT_SEND, {
-        conversationId,
-        type,
-        fileKey: upload.fileKey,
-        fileName: upload.fileName,
-        mimeType: upload.mimeType,
-        fileSize: upload.fileSize,
-        tempId: generateTempId(),
-        replyToMessageId: replyingTo?.id,
-      });
-      if (mountedRef.current) onCancelReply?.();
-      toast.success('فایل ارسال شد');
-    } catch {
-      toast.error('ارسال فایل ناموفق بود');
-    } finally {
-      if (mountedRef.current) setSending(false);
-    }
+    if (!currentUser) return;
+    // Optimistic bubble appears immediately (with image preview); upload + send
+    // + retry are handled by the outbox, so a missed broadcast never loses it.
+    sendMedia({
+      conversationId,
+      type,
+      file,
+      sender: { id: currentUser.id, firstName: currentUser.firstName, lastName: currentUser.lastName },
+      replyTo: replyingTo ?? null,
+    });
+    onCancelReply?.();
   };
 
   const sendVoiceMessage = async () => {
     const recording = await stopRecording();
-    if (!recording) return;
-    if (!socket.connected) {
-      toast.loading('در حال اتصال مجدد...', { id: 'reconnect' });
-      const ok = await waitForSocket();
-      toast.dismiss('reconnect');
-      if (!ok) { toast.error('اتصال برقرار نشد. دوباره امتحان کنید'); return; }
-    }
-    if (mountedRef.current) setSending(true);
-    try {
-      const file = new File([recording.blob], `voice_${Date.now()}.ogg`, { type: recording.mimeType });
-      const form = new FormData();
-      form.append('file', file);
-      const res = await api.post<{ data: import('@karamooziyar/shared').UploadResponseDto }>(
-        `/uploads/message-attachment?conversationId=${conversationId}`,
-        form,
-        { headers: { 'Content-Type': 'multipart/form-data' } },
-      );
-      const upload = res.data.data;
-      socket.emit(SOCKET_EVENTS.CHAT_SEND, {
-        conversationId,
-        type: MessageType.VOICE,
-        fileKey: upload.fileKey,
-        fileName: upload.fileName,
-        mimeType: upload.mimeType,
-        fileSize: upload.fileSize,
-        tempId: generateTempId(),
-        replyToMessageId: replyingTo?.id,
-      });
-      if (mountedRef.current) onCancelReply?.();
-    } catch {
-      toast.error('ارسال پیام صوتی ناموفق بود');
-    } finally {
-      if (mountedRef.current) setSending(false);
-    }
+    if (!recording || !currentUser) return;
+    // Normalize the recorded MIME (`audio/webm;codecs=opus` → `audio/webm`) and
+    // give the blob a matching extension so server validation accepts it.
+    const { file } = voiceFileFromBlob(recording.blob, recording.mimeType);
+    sendMedia({
+      conversationId,
+      type: MessageType.VOICE,
+      file,
+      duration: recording.duration,
+      sender: { id: currentUser.id, firstName: currentUser.firstName, lastName: currentUser.lastName },
+      replyTo: replyingTo ?? null,
+    });
+    onCancelReply?.();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -458,7 +319,6 @@ export function MessageInput({
         {canSendText ? (
           <button
             onClick={sendTextMessage}
-            disabled={sending}
             className="w-9 h-9 bg-primary-600 hover:bg-primary-700 text-white rounded-full flex items-center justify-center transition-colors flex-shrink-0 shadow-sm disabled:opacity-50"
           >
             <Send className="w-4 h-4 -rotate-90 translate-x-0.5" />
@@ -466,7 +326,6 @@ export function MessageInput({
         ) : isRecording ? (
           <button
             onClick={sendVoiceMessage}
-            disabled={sending}
             className="w-9 h-9 bg-green-500 hover:bg-green-600 text-white rounded-full flex items-center justify-center transition-colors flex-shrink-0 shadow-sm"
           >
             <Send className="w-4 h-4 -rotate-90 translate-x-0.5" />

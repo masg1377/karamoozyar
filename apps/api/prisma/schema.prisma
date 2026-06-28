@@ -136,6 +136,12 @@ model Message {
   deletedAt      DateTime?
   deletedBy      String?
 
+  // Idempotency: stable client-generated identity (UUID). Null for legacy rows.
+  // A partial unique index on (senderId, clientMessageId) WHERE clientMessageId
+  // IS NOT NULL guarantees a sender cannot create the same message twice, while
+  // leaving historical NULL rows unaffected. See migration for the partial index.
+  clientMessageId String?
+
   // Pin support
   pinnedAt       DateTime?   // null = not pinned; non-null = pinned at this time
   pinnedBy       String?     // userId who pinned (for audit)
@@ -156,6 +162,11 @@ model Message {
   @@index([senderId])
   @@index([deletedAt])
   @@index([replyToMessageId])
+  // Idempotency guard. Declared here so the Prisma client exposes the
+  // `senderId_clientMessageId` compound where-unique; the generated migration
+  // is hand-edited to a PARTIAL unique index (WHERE clientMessageId IS NOT NULL)
+  // so multiple legacy NULL rows remain valid.
+  @@unique([senderId, clientMessageId])
   @@map("messages")
 }
 

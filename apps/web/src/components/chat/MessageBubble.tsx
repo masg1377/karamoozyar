@@ -3,15 +3,41 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { cn, formatTime, formatFileSize, isImageMime, isVoiceMime } from '@/lib/utils';
-import type { MessageDto } from '@karamooziyar/shared';
+import type { AttachmentDto, MessageDto } from '@karamooziyar/shared';
 import {
   Check, CheckCheck, Copy, Trash2, Pencil, Download,
-  Play, Pause, FileText, Reply, Pin, PinOff, Clock,
+  Play, Pause, FileText, Reply, Pin, PinOff, Clock, RotateCw, AlertCircle,
 } from 'lucide-react';
 import type { ChatMessage } from '@/store/chat.store';
 import { toast } from 'sonner';
 import { useSwipeToReply } from '@/hooks/useSwipeToReply';
 import { UserAvatar } from '@/components/shared/UserAvatar';
+import { getAttachmentSignedUrl } from '@/lib/attachment';
+import { retryMessage } from '@/lib/outbox';
+
+/**
+ * Resolve the URL to render for a message attachment.
+ * - Optimistic local previews (id starts with `local_`) use the in-memory
+ *   object URL directly.
+ * - Persisted attachments are fetched as short-lived signed URLs by id, so they
+ *   load for the recipient and survive refresh/expiry (no stale 1h URL baked in).
+ *   Falls back to the stored fileUrl (e.g. local-driver static link) on error.
+ */
+function useMediaUrl(att: AttachmentDto | null, isLocalPreview: boolean): string | null {
+  const [url, setUrl] = useState<string | null>(isLocalPreview ? att?.fileUrl ?? null : null);
+  const attId = att?.id ?? null;
+  const fallback = att?.fileUrl ?? null;
+  useEffect(() => {
+    if (!attId) { setUrl(null); return; }
+    if (isLocalPreview) { setUrl(fallback); return; }
+    let cancelled = false;
+    getAttachmentSignedUrl(attId, 'message')
+      .then((u) => { if (!cancelled) setUrl(u); })
+      .catch(() => { if (!cancelled) setUrl(fallback); });
+    return () => { cancelled = true; };
+  }, [attId, isLocalPreview, fallback]);
+  return url;
+}
 
 interface MessageBubbleProps {
   message: MessageDto;
@@ -103,16 +129,23 @@ function fmtSecs(s: number) {
   return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 }
 
-function VoicePlayer({ src, isMine, storedDuration }: { src: string; isMine: boolean; storedDuration: number | null }) {
+function VoicePlayer({ src, isMine, storedDuration }: { src: string | null; isMine: boolean; storedDuration: number | null }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
-  const [dur, setDur] = useState(storedDuration ?? 0);
+  // Seed from the server-persisted duration so a 1-minute voice shows 1:00
+  // immediately — no false 0:00 while audio metadata streams in.
+  const [dur, setDur] = useState(storedDuration && storedDuration > 0 ? storedDuration : 0);
   const [prog, setProg] = useState(0);
 
   useEffect(() => {
+    if (storedDuration && storedDuration > 0) setDur(storedDuration);
+  }, [storedDuration]);
+
+  useEffect(() => {
+    if (!src) { audioRef.current = null; return; }
     const a = new Audio(src); audioRef.current = a;
-    const onMeta = () => { if (isFinite(a.duration)) setDur(a.duration); };
+    const onMeta = () => { if (isFinite(a.duration) && a.duration > 0) setDur(a.duration); };
     const onTime = () => { setCur(a.currentTime); if (a.duration && isFinite(a.duration)) setProg(a.currentTime / a.duration * 100); };
     const onEnd = () => { setPlaying(false); setCur(0); setProg(0); a.currentTime = 0; };
     a.addEventListener('loadedmetadata', onMeta);
@@ -130,9 +163,11 @@ function VoicePlayer({ src, isMine, storedDuration }: { src: string; isMine: boo
     a.currentTime = ratio * a.duration; setProg(ratio * 100);
   };
   const bars = [3,5,8,6,9,7,10,8,5,7,9,6,8,5,7,10,8,6,9,7,5,8,7,9,6,8,5,7,6,8];
+  // Loading state: duration not yet known (no stored value, metadata pending).
+  const durLabel = dur > 0 ? fmtSecs(dur) : '··:··';
   return (
     <div dir="ltr" className="flex items-center gap-2.5 min-w-[200px] max-w-[260px]">
-      <button onClick={toggle} className={cn('w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors', isMine ? 'bg-white/20 hover:bg-white/30' : 'bg-primary-100 hover:bg-primary-200')}>
+      <button onClick={toggle} disabled={!src} className={cn('w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors disabled:opacity-50', isMine ? 'bg-white/20 hover:bg-white/30' : 'bg-primary-100 hover:bg-primary-200')}>
         {playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 translate-x-0.5" />}
       </button>
       <div className="flex-1 flex flex-col gap-1">
@@ -140,7 +175,7 @@ function VoicePlayer({ src, isMine, storedDuration }: { src: string; isMine: boo
           {bars.map((h, i) => <div key={i} style={{ height: `${h * 2.2}px` }} className={cn('w-[3px] rounded-full flex-shrink-0 transition-colors', (i / bars.length) * 100 <= prog ? isMine ? 'bg-white/90' : 'bg-primary-500' : isMine ? 'bg-white/35' : 'bg-gray-300')} />)}
         </div>
         <p className={cn('text-[11px] leading-none tabular-nums', isMine ? 'text-white/65' : 'text-gray-400')}>
-          {playing || cur > 0 ? `${fmtSecs(cur)} / ${fmtSecs(dur)}` : fmtSecs(dur)}
+          {playing || cur > 0 ? `${fmtSecs(cur)} / ${durLabel}` : durLabel}
         </p>
       </div>
     </div>
@@ -179,13 +214,17 @@ export function MessageBubble({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const replyIconRef = useRef<HTMLDivElement>(null);
 
-  const isPending = !!(message as ChatMessage).pending;
-  const canCopy  = !isPending && message.type === 'TEXT' && !!message.body;
-  const canEdit  = !isPending && isMine && message.type === 'TEXT' && !!onEdit;
-  const canDelete = !isPending && !!onDelete;
-  const canReply = !!onReply;
+  const cm = message as ChatMessage;
+  const state = cm.deliveryState;
+  const isSending = state === 'queued' || state === 'uploading' || state === 'sending';
+  const isFailed = state === 'failed';
+  const isUnconfirmed = isSending || isFailed; // not yet durably persisted
+  const canCopy  = !isUnconfirmed && message.type === 'TEXT' && !!message.body;
+  const canEdit  = !isUnconfirmed && isMine && message.type === 'TEXT' && !!onEdit;
+  const canDelete = !isUnconfirmed && !!onDelete;
+  const canReply = !isUnconfirmed && !!onReply;
   const isPinned = !!message.pinnedAt;
-  const canPin   = !isPinned && !!onPin;
+  const canPin   = !isUnconfirmed && !isPinned && !!onPin;
   const canUnpin = isPinned && !!onUnpin;
   const hasActions = canCopy || canEdit || canDelete || canReply || canPin || canUnpin;
 
@@ -222,6 +261,12 @@ export function MessageBubble({
     closeMenu();
   };
 
+  // NOTE: hooks must run before any early return — keep useMediaUrl above the
+  // deleted-message branch so hook order stays stable across renders.
+  const att = message.attachment;
+  const isLocalPreview = !!att && att.id.startsWith('local_');
+  const mediaUrl = useMediaUrl(att, isLocalPreview);
+
   if (message.deletedAt) {
     return (
       <div className={cn('flex', isMine ? 'justify-start' : 'justify-end')}>
@@ -230,16 +275,17 @@ export function MessageBubble({
     );
   }
 
-  const att = message.attachment;
-
   const renderContent = () => {
     if (att && isImageMime(att.mimeType)) {
-      return <img src={att.fileUrl} alt={att.fileName} className="max-w-[240px] max-h-[300px] rounded-xl object-cover cursor-pointer" onClick={() => window.open(att.fileUrl, '_blank')} />;
+      if (!mediaUrl) {
+        return <div className="w-[240px] h-[180px] rounded-xl bg-black/5 animate-pulse" aria-label={att.fileName} />;
+      }
+      return <img src={mediaUrl} alt={att.fileName} className="max-w-[240px] max-h-[300px] rounded-xl object-cover cursor-pointer" onClick={() => mediaUrl && window.open(mediaUrl, '_blank')} />;
     }
-    if (att && isVoiceMime(att.mimeType)) return <VoicePlayer src={att.fileUrl} isMine={isMine} storedDuration={att.duration} />;
+    if (att && isVoiceMime(att.mimeType)) return <VoicePlayer src={mediaUrl} isMine={isMine} storedDuration={att.duration} />;
     if (att) {
       return (
-        <a href={att.fileUrl} download={att.fileName} target="_blank" rel="noreferrer" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+        <a href={mediaUrl ?? undefined} download={att.fileName} target="_blank" rel="noreferrer" className={cn('flex items-center gap-2 transition-opacity', mediaUrl ? 'hover:opacity-80' : 'opacity-60 pointer-events-none')}>
           <div className={cn('p-2 rounded-lg flex-shrink-0', isMine ? 'bg-white/20' : 'bg-primary-50')}><FileText className="w-5 h-5" /></div>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium truncate max-w-[150px]">{att.fileName}</p>
@@ -249,8 +295,14 @@ export function MessageBubble({
         </a>
       );
     }
+    // A media-typed message must never silently fall back to its (empty) body.
+    if (message.type !== 'TEXT') {
+      return <p className={cn('text-sm italic', isMine ? 'text-white/70' : 'text-gray-400')}>پیوست در دسترس نیست</p>;
+    }
     return <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{message.body}</p>;
   };
+
+  const handleRetry = () => retryMessage(message.conversationId, message.clientMessageId ?? message.id);
 
   const avatarEl = senderFirstName && senderLastName ? (
     <div className="flex-shrink-0 self-end mb-0.5">
@@ -349,10 +401,23 @@ export function MessageBubble({
             {/* Meta row */}
             <div className={cn('flex items-center gap-1 mt-1', isMine ? 'justify-start' : 'justify-end')}>
               {message.isEdited && <span className={cn('text-xs', isMine ? 'text-white/60' : 'text-gray-400')}>ویرایش شده</span>}
+              {/* Failed: explicit, tappable retry (Telegram-style). Stays visible. */}
+              {isMine && isFailed && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); handleRetry(); }}
+                  className="flex items-center gap-1 text-[11px] text-red-200 hover:text-white"
+                  aria-label="ارسال مجدد"
+                  title="ارسال نشد — برای تلاش مجدد بزنید"
+                >
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <RotateCw className="w-3.5 h-3.5" />
+                </button>
+              )}
               <span className={cn('text-xs', isMine ? 'text-white/60' : 'text-gray-400')}>{formatTime(message.createdAt)}</span>
-              {isMine && (
+              {isMine && !isFailed && (
                 <span className="text-white/70">
-                  {isPending
+                  {isSending
                     ? <Clock className="w-3 h-3 inline opacity-70" />
                     : message.status === 'SEEN'
                       ? <CheckCheck className="w-3.5 h-3.5 inline" />

@@ -85,6 +85,12 @@ export interface ReplyMessageDto {
 
 export interface MessageDto {
   id: string;
+  /**
+   * Stable client-generated identity (UUID) sent with the original request.
+   * Used for optimistic-UI reconciliation and server-side idempotency.
+   * Null for legacy rows created before idempotency was introduced.
+   */
+  clientMessageId: string | null;
   conversationId: string;
   senderId: string;
   senderName: string;
@@ -188,8 +194,37 @@ export interface SocketChatSendPayload {
   fileName?: string;
   mimeType?: string;
   fileSize?: number;
-  tempId: string;
+  /** Client-recorded media duration in seconds (voice/video). Server clamps/validates. */
+  duration?: number;
+  /** Stable client identity (UUID). Doubles as the idempotency key. */
+  clientMessageId: string;
+  /**
+   * @deprecated kept for backward compatibility during rollout — always equals
+   * clientMessageId. New code should rely on clientMessageId.
+   */
+  tempId?: string;
   replyToMessageId?: string;
+}
+
+export type SocketChatSendErrorCode =
+  | 'VALIDATION'
+  | 'FORBIDDEN'
+  | 'NOT_FOUND'
+  | 'ATTACHMENT'
+  | 'INTERNAL';
+
+/**
+ * Stable typed acknowledgement returned to the CHAT_SEND emitter.
+ * `ok: true`  → message is durably persisted; `message` is the canonical row.
+ * `ok: false` → not persisted; client keeps the optimistic item and marks it failed.
+ * `clientMessageId` is always echoed so the client can reconcile by identity.
+ */
+export interface SocketChatSendAck {
+  ok: boolean;
+  clientMessageId: string;
+  message?: MessageDto;
+  code?: SocketChatSendErrorCode;
+  error?: string;
 }
 
 export interface SocketTypingPayload {

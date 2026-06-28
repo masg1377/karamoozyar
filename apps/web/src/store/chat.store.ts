@@ -1,10 +1,17 @@
 'use client';
 
 import { create } from 'zustand';
-import type { MessageDto, ConversationSummaryDto } from '@karamooziyar/shared';
+import type { ConversationSummaryDto } from '@karamooziyar/shared';
+import {
+  type ClientMessage,
+  type DeliveryState,
+  reconcileMessage,
+  mergeServerMessages,
+  identityKey,
+} from '@/lib/message-merge';
 
-// Extends MessageDto with client-only `pending` flag for optimistic sends
-export type ChatMessage = MessageDto & { pending?: boolean };
+// ChatMessage carries the optimistic delivery state alongside the server DTO.
+export type ChatMessage = ClientMessage;
 
 interface ChatState {
   conversations: ConversationSummaryDto[];
@@ -15,11 +22,15 @@ interface ChatState {
 
   setConversations: (convs: ConversationSummaryDto[]) => void;
   updateConversation: (conv: ConversationSummaryDto) => void;
-  setMessages: (conversationId: string, msgs: ChatMessage[], nextCursor: string | null) => void;
+  /** Merge a freshly fetched page; preserves pending/failed local items. */
+  mergeMessages: (conversationId: string, msgs: ChatMessage[], nextCursor: string | null) => void;
   prependMessages: (conversationId: string, msgs: ChatMessage[], nextCursor: string | null) => void;
-  addMessage: (conversationId: string, msg: ChatMessage) => void;
-  /** Replace the optimistic pending message (id === tempId) with the confirmed message from server */
-  replacePendingMessage: (conversationId: string, tempId: string, msg: ChatMessage) => void;
+  /** Insert an optimistic outgoing message (id === clientMessageId). */
+  insertOptimistic: (conversationId: string, msg: ChatMessage) => void;
+  /** Reconcile a confirmed/incoming server message (dedup by identity). */
+  reconcile: (conversationId: string, msg: ChatMessage) => void;
+  /** Move an outgoing message to a new delivery state, matched by clientMessageId. */
+  setDeliveryState: (conversationId: string, clientMessageId: string, state: DeliveryState) => void;
   updateMessage: (conversationId: string, messageId: string, patch: Partial<ChatMessage>) => void;
   removeMessage: (conversationId: string, messageId: string) => void;
   setTyping: (conversationId: string, userId: string, isTyping: boolean) => void;
@@ -51,44 +62,62 @@ export const useChatStore = create<ChatState>((set) => ({
       return { conversations: updated };
     }),
 
-  setMessages: (conversationId, msgs, nextCursor) =>
+  mergeMessages: (conversationId, msgs, nextCursor) =>
     set((state) => ({
-      messages: { ...state.messages, [conversationId]: msgs },
+      messages: {
+        ...state.messages,
+        [conversationId]: mergeServerMessages(state.messages[conversationId] ?? [], msgs),
+      },
       nextCursor: { ...state.nextCursor, [conversationId]: nextCursor },
       hasMore: { ...state.hasMore, [conversationId]: nextCursor !== null },
     })),
 
   prependMessages: (conversationId, msgs, nextCursor) =>
-    set((state) => ({
-      messages: {
-        ...state.messages,
-        [conversationId]: [...msgs, ...(state.messages[conversationId] ?? [])],
-      },
-      nextCursor: { ...state.nextCursor, [conversationId]: nextCursor },
-      hasMore: { ...state.hasMore, [conversationId]: nextCursor !== null },
-    })),
-
-  addMessage: (conversationId, msg) =>
-    set((state) => ({
-      messages: {
-        ...state.messages,
-        [conversationId]: [...(state.messages[conversationId] ?? []), msg],
-      },
-    })),
-
-  replacePendingMessage: (conversationId, tempId, msg) =>
     set((state) => {
-      const list = state.messages[conversationId] ?? [];
-      const idx = list.findIndex((m) => m.id === tempId);
-      if (idx >= 0) {
-        // Replace in-place so the message doesn't jump
-        const updated = [...list];
-        updated[idx] = { ...msg, pending: false };
-        return { messages: { ...state.messages, [conversationId]: updated } };
-      }
-      // No pending match — just append (e.g. received from other session)
-      return { messages: { ...state.messages, [conversationId]: [...list, msg] } };
+      const existing = state.messages[conversationId] ?? [];
+      // Guard against re-prepending an already-present page (dedup by identity).
+      const have = new Set(existing.map(identityKey));
+      const fresh = msgs.filter((m) => !have.has(identityKey(m)));
+      return {
+        messages: { ...state.messages, [conversationId]: [...fresh, ...existing] },
+        nextCursor: { ...state.nextCursor, [conversationId]: nextCursor },
+        hasMore: { ...state.hasMore, [conversationId]: nextCursor !== null },
+      };
     }),
+
+  insertOptimistic: (conversationId, msg) =>
+    set((state) => ({
+      messages: {
+        ...state.messages,
+        // reconcileMessage de-dups if (somehow) the same clientMessageId already exists,
+        // and preserves the explicit optimistic state.
+        [conversationId]: reconcileMessage(
+          state.messages[conversationId] ?? [],
+          msg,
+          msg.deliveryState,
+        ),
+      },
+    })),
+
+  reconcile: (conversationId, msg) =>
+    set((state) => ({
+      messages: {
+        ...state.messages,
+        [conversationId]: reconcileMessage(state.messages[conversationId] ?? [], msg),
+      },
+    })),
+
+  setDeliveryState: (conversationId, clientMessageId, deliveryState) =>
+    set((state) => ({
+      messages: {
+        ...state.messages,
+        [conversationId]: (state.messages[conversationId] ?? []).map((m) =>
+          m.clientMessageId === clientMessageId || m.id === clientMessageId
+            ? { ...m, deliveryState }
+            : m,
+        ),
+      },
+    })),
 
   updateMessage: (conversationId, messageId, patch) =>
     set((state) => ({

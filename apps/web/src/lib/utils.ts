@@ -84,3 +84,41 @@ export function isVoiceMime(mimeType: string): boolean {
 export function generateTempId(): string {
   return `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
+
+/**
+ * Stable, collision-resistant client message identity used both as the
+ * optimistic message id and the server-side idempotency key. Prefers the
+ * platform UUID; falls back for older browsers.
+ */
+export function generateClientMessageId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `cm_${crypto.randomUUID()}`;
+    }
+  } catch {
+    /* fall through */
+  }
+  return `cm_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+}
+
+/** Drop the `;codecs=...` parameter so the bare MIME matches server allow-lists. */
+export function baseMimeType(mimeType: string): string {
+  return (mimeType.split(';')[0] ?? mimeType).trim().toLowerCase();
+}
+
+/** Pick a sensible file extension for a recorded/blob MIME type. */
+export function extensionForMime(mimeType: string): string {
+  const base = baseMimeType(mimeType);
+  const map: Record<string, string> = {
+    'audio/webm': 'webm',
+    'audio/ogg': 'ogg',
+    'audio/mpeg': 'mp3',
+    'audio/mp4': 'm4a',
+    'audio/wav': 'wav',
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+  };
+  return map[base] ?? 'bin';
+}

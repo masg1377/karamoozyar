@@ -14,6 +14,7 @@ import type {
 } from '@karamooziyar/shared';
 import { Role, MessageType, MessageStatus } from '@karamooziyar/shared';
 import { PrismaService } from '../../prisma/prisma.service';
+import { isUniqueViolation } from '../../common/utils/prisma-error.util';
 import type { Message, MessageAttachment } from '@prisma/client';
 
 // ─── Prisma include helpers ────────────────────────────────────────────────────
@@ -151,53 +152,115 @@ export class ConversationsService {
     return { data: items.map(msg => this.mapMessageToDto(msg as MessageWithRelations)), nextCursor };
   }
 
-  async sendMessage(
-    conversationId: string,
-    senderId: string,
-    senderRole: string,
-    body: string | undefined,
-    type: string,
-    fileKey?: string,
-    replyToMessageId?: string,
-  ): Promise<MessageDto> {
+  /**
+   * Durably persist a message (and its attachment, if any) and bump the
+   * conversation's last-activity — all inside a single transaction so the
+   * message, attachment, and conversation summary can never diverge.
+   *
+   * Idempotent: keyed by (senderId, clientMessageId). A duplicate request
+   * (reconnect replay, manual retry, concurrent double-send) returns the
+   * already-persisted message instead of creating a second row, and the
+   * caller learns this via `deduped` so it can avoid re-broadcasting /
+   * double-incrementing notifications.
+   */
+  async sendMessage(input: {
+    conversationId: string;
+    senderId: string;
+    senderRole: string;
+    clientMessageId: string;
+    body?: string;
+    type: string;
+    replyToMessageId?: string;
+    attachment?: {
+      fileKey: string;
+      fileUrl: string;
+      fileName: string;
+      mimeType: string;
+      fileSize: number;
+      duration: number | null;
+    };
+  }): Promise<{ message: MessageDto; deduped: boolean }> {
+    const { conversationId, senderId, senderRole, clientMessageId, type } = input;
+    let { body, replyToMessageId } = input;
+
     const conversation = await this.prisma.conversation.findUnique({ where: { id: conversationId } });
     if (!conversation) throw new NotFoundException('گفتگو یافت نشد');
     if (senderRole === Role.USER && conversation.userId !== senderId) throw new ForbiddenException('دسترسی غیرمجاز');
+
+    // ── Idempotency fast-path: already persisted? return it untouched ──
+    const existing = await this.findByClientMessageId(senderId, clientMessageId);
+    if (existing) return { message: this.mapMessageToDto(existing), deduped: true };
 
     // Validate reply target belongs to same conversation
     if (replyToMessageId) {
       const replyTarget = await this.prisma.message.findUnique({ where: { id: replyToMessageId } });
       if (!replyTarget || replyTarget.conversationId !== conversationId) {
-        // Silently ignore invalid reply target
-        replyToMessageId = undefined;
+        replyToMessageId = undefined; // silently ignore invalid reply target
       }
     }
 
     const isFromUser = senderRole === Role.USER;
 
-    const message = await this.prisma.message.create({
-      data: {
-        conversationId,
-        senderId,
-        type: type as 'TEXT' | 'IMAGE' | 'FILE' | 'VOICE',
-        body: body ?? null,
-        status: 'SENT',
-        ...(replyToMessageId ? { replyToMessageId } : {}),
-      },
+    try {
+      const message = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.message.create({
+          data: {
+            conversationId,
+            senderId,
+            // clientMessageId column exists after the idempotency migration;
+            // cast keeps tsc happy until `prisma generate` is re-run (same
+            // pattern used for pinnedAt elsewhere in this service).
+            clientMessageId,
+            type: type as 'TEXT' | 'IMAGE' | 'FILE' | 'VOICE',
+            body: body ?? null,
+            status: 'SENT',
+            ...(replyToMessageId ? { replyToMessageId } : {}),
+            ...(input.attachment ? { attachment: { create: { ...input.attachment } } } : {}),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
+          include: MESSAGE_INCLUDE,
+        });
+
+        await tx.conversation.update({
+          where: { id: conversationId },
+          data: {
+            lastMessageAt: new Date(),
+            lastMessageText: body ?? `[${type}]`,
+            unreadByAdmin: isFromUser ? { increment: 1 } : undefined,
+            unreadByUser: !isFromUser ? { increment: 1 } : undefined,
+          },
+        });
+
+        return created;
+      });
+
+      return { message: this.mapMessageToDto(message as MessageWithRelations), deduped: false };
+    } catch (err) {
+      // Concurrent duplicate hit the partial unique index → return the winner.
+      if (isUniqueViolation(err)) {
+        const winner = await this.findByClientMessageId(senderId, clientMessageId);
+        if (winner) return { message: this.mapMessageToDto(winner), deduped: true };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Look up a message by its idempotency key. Returns null if not yet persisted.
+   * Intentionally does NOT filter soft-deleted rows so the unique-violation
+   * fallback always resolves to the winning row (the partial unique index
+   * covers deleted rows too).
+   */
+  private async findByClientMessageId(
+    senderId: string,
+    clientMessageId: string,
+  ): Promise<MessageWithRelations | null> {
+    const found = await this.prisma.message.findFirst({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      where: { senderId, clientMessageId } as any,
       include: MESSAGE_INCLUDE,
     });
-
-    await this.prisma.conversation.update({
-      where: { id: conversationId },
-      data: {
-        lastMessageAt: new Date(),
-        lastMessageText: body ?? `[${type}]`,
-        unreadByAdmin: isFromUser ? { increment: 1 } : undefined,
-        unreadByUser: !isFromUser ? { increment: 1 } : undefined,
-      },
-    });
-
-    return this.mapMessageToDto(message as MessageWithRelations);
+    return (found as MessageWithRelations | null) ?? null;
   }
 
   async editMessage(messageId: string, requesterId: string, body: string): Promise<MessageDto> {
@@ -406,6 +469,8 @@ export class ConversationsService {
 
     return {
       id: msg.id,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      clientMessageId: ((msg as any).clientMessageId as string | null | undefined) ?? null,
       conversationId: msg.conversationId,
       senderId: msg.senderId,
       senderName: `${msg.sender.firstName} ${msg.sender.lastName}`,

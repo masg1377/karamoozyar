@@ -156,6 +156,23 @@ export class UploadsService implements OnModuleInit {
     return getSignedUrl(this.s3, command, { expiresIn });
   }
 
+  /**
+   * Build the STABLE, non-expiring URL for an object key — what we persist on
+   * the attachment row. For the local driver this is a static `/files/...` link
+   * served by the API; for s3 it is the path-style object URL. It is NOT a
+   * pre-signed URL: signing is done on demand per request (see
+   * getSignedUrlForAttachment) so receivers and page refreshes never hit an
+   * expired link. Private-bucket access control stays enforced server-side.
+   */
+  buildPublicUrl(fileKey: string, fileName?: string): string {
+    if (this.driver === 'local') {
+      const base = `${this.publicBaseUrl}/files/${fileKey}`;
+      return fileName ? `${base}?dl=${encodeURIComponent(fileName)}` : base;
+    }
+    const s3Config = this.configService.get('s3', { infer: true });
+    return `${s3Config.endpoint}/${this.bucketName}/${fileKey}`;
+  }
+
   async deleteFile(fileKey: string): Promise<void> {
     try {
       if (this.driver === 'local') {
