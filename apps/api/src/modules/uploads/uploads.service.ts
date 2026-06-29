@@ -17,6 +17,7 @@ import {
   CreateBucketCommand,
   HeadBucketCommand,
   PutBucketPolicyCommand,
+  PutBucketCorsCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { v4 as uuidv4 } from 'uuid';
@@ -115,6 +116,30 @@ export class UploadsService implements OnModuleInit {
       this.logger.log(`Public read policy applied for profiles/ prefix`);
     } catch (err) {
       this.logger.warn(`Could not set bucket policy: ${(err as Error).message}`);
+    }
+
+    // Allow the browser to fetch object bytes cross-origin (needed for the
+    // in-app image viewer's download / Web-Share button to read the blob).
+    try {
+      await this.s3.send(
+        new PutBucketCorsCommand({
+          Bucket: this.bucketName,
+          CORSConfiguration: {
+            CORSRules: [
+              {
+                AllowedMethods: ['GET', 'HEAD'],
+                AllowedOrigins: ['*'],
+                AllowedHeaders: ['*'],
+                ExposeHeaders: ['Content-Length', 'Content-Type', 'Content-Disposition'],
+                MaxAgeSeconds: 3600,
+              },
+            ],
+          },
+        }),
+      );
+      this.logger.log(`Bucket CORS configured (GET/HEAD allowed for browser fetch)`);
+    } catch (err) {
+      this.logger.warn(`Could not set bucket CORS: ${(err as Error).message}`);
     }
   }
 
