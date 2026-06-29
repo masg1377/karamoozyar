@@ -11,12 +11,14 @@ import { useNewsletterStore } from '@/store/newsletter.store';
 import { toast } from 'sonner';
 import api from '@/lib/api-client';
 import { getAttachmentSignedUrl } from '@/lib/attachment';
+import { ImageLightbox } from '@/components/shared/ImageLightbox';
 import { createPortal } from 'react-dom';
 
 // ─── Banner image ─────────────────────────────────────────────────────────────
 
 function BannerImage({ block, full = false }: { block: NewsletterBlock; full?: boolean }) {
   const [src, setSrc] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(false);
 
   useEffect(() => {
     if (!block.attachmentId) return;
@@ -28,8 +30,13 @@ function BannerImage({ block, full = false }: { block: NewsletterBlock; full?: b
     : <div className="w-16 h-16 rounded-xl bg-gray-100 animate-pulse flex-shrink-0" />;
 
   if (full) {
-    return <img src={src} alt={block.caption ?? 'بنر'} className="w-full object-cover max-h-64 cursor-pointer"
-      onClick={() => window.open(src, '_blank')} />;
+    return (
+      <>
+        <img src={src} alt={block.caption ?? 'بنر'} className="w-full object-cover max-h-64 cursor-pointer"
+          onClick={() => setZoom(true)} />
+        {zoom && <ImageLightbox src={src} alt={block.caption ?? 'بنر'} fileName={block.meta?.fileName} onClose={() => setZoom(false)} />}
+      </>
+    );
   }
   return <img src={src} alt={block.caption ?? 'بنر'} className="w-16 h-16 rounded-xl object-cover flex-shrink-0" />;
 }
@@ -38,6 +45,7 @@ function BannerImage({ block, full = false }: { block: NewsletterBlock; full?: b
 
 function MediaBlock({ block }: { block: NewsletterBlock }) {
   const [src, setSrc] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(false);
 
   useEffect(() => {
     if (!block.attachmentId) return;
@@ -53,9 +61,10 @@ function MediaBlock({ block }: { block: NewsletterBlock }) {
   if (block.type === 'IMAGE') return (
     <div className="px-4 py-1">
       {src
-        ? <img src={src} alt={block.meta?.fileName ?? 'تصویر'} className="w-full rounded-xl object-cover max-h-80 cursor-pointer" onClick={() => window.open(src, '_blank')} />
+        ? <img src={src} alt={block.meta?.fileName ?? 'تصویر'} className="w-full rounded-xl object-cover max-h-80 cursor-pointer" onClick={() => setZoom(true)} />
         : <div className="w-full h-32 rounded-xl bg-gray-100 animate-pulse" />}
       {block.caption && <p className="text-xs text-gray-500 mt-1 text-center">{block.caption}</p>}
+      {zoom && src && <ImageLightbox src={src} alt={block.meta?.fileName ?? 'تصویر'} fileName={block.meta?.fileName} onClose={() => setZoom(false)} />}
     </div>
   );
 

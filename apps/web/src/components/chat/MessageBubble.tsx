@@ -12,6 +12,7 @@ import type { ChatMessage } from '@/store/chat.store';
 import { toast } from 'sonner';
 import { useSwipeToReply } from '@/hooks/useSwipeToReply';
 import { UserAvatar } from '@/components/shared/UserAvatar';
+import { ImageLightbox } from '@/components/shared/ImageLightbox';
 import { getAttachmentSignedUrl } from '@/lib/attachment';
 import { retryMessage } from '@/lib/outbox';
 
@@ -205,6 +206,7 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   const [menuPos, setMenuPos] = useState<MenuPos | null>(null);
   const showMenu = menuPos !== null;
+  const [lightboxOpen, setLightboxOpen] = useState(false);
 
   const dotButtonRef = useRef<HTMLButtonElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
@@ -280,7 +282,7 @@ export function MessageBubble({
       if (!mediaUrl) {
         return <div className="w-[240px] h-[180px] rounded-xl bg-black/5 animate-pulse" aria-label={att.fileName} />;
       }
-      return <img src={mediaUrl} alt={att.fileName} className="max-w-[240px] max-h-[300px] rounded-xl object-cover cursor-pointer" onClick={() => mediaUrl && window.open(mediaUrl, '_blank')} />;
+      return <img src={mediaUrl} alt={att.fileName} className="max-w-[240px] max-h-[300px] rounded-xl object-cover cursor-pointer" onClick={() => mediaUrl && setLightboxOpen(true)} />;
     }
     if (att && isVoiceMime(att.mimeType)) return <VoicePlayer src={mediaUrl} isMine={isMine} storedDuration={att.duration} />;
     if (att) {
@@ -443,6 +445,10 @@ export function MessageBubble({
           {canEdit  && <MenuItem icon={<Pencil className="w-4 h-4" />} label="ویرایش" onClick={() => { onEdit!(message); closeMenu(); }} />}
           {canDelete && <MenuItem icon={<Trash2 className="w-4 h-4" />} label="حذف" danger onClick={() => { onDelete!(message.id); closeMenu(); }} />}
         </ContextMenu>
+      )}
+
+      {lightboxOpen && (
+        <ImageLightbox src={mediaUrl} alt={att?.fileName} fileName={att?.fileName} onClose={() => setLightboxOpen(false)} />
       )}
     </>
   );
