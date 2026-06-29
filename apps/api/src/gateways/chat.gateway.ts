@@ -162,6 +162,14 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       return { ok: false, clientMessageId, code: 'VALIDATION', error: 'missing clientMessageId' };
     }
 
+    // ── STAGE 1: DURABLE PERSISTENCE ──────────────────────────────────────────
+    // ONLY a failure here may produce ok:false. Once sendMessage() returns, the
+    // message (and its attachment) are committed; the ack is ok:true no matter
+    // what any later side-effect does. This guarantees a persisted message can
+    // never be turned into a client-side `failed` by a non-message side-effect
+    // (conversation-summary read, notification, push, seen bookkeeping, …).
+    let message: import('@karamooziyar/shared').MessageDto;
+    let deduped: boolean;
     try {
       // Build the durable attachment (stable, non-expiring URL) up front so the
       // message + attachment are persisted atomically inside sendMessage.
@@ -172,7 +180,6 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             fileName: payload.fileName ?? payload.fileKey.split('/').pop() ?? 'file',
             mimeType: payload.mimeType ?? 'application/octet-stream',
             fileSize: payload.fileSize ?? 0,
-            // Trust client duration only for audio/video; clamp via validator upstream.
             duration:
               payload.type === 'VOICE' && typeof payload.duration === 'number'
                 ? payload.duration
@@ -180,7 +187,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           }
         : undefined;
 
-      const { message, deduped } = await this.conversationsService.sendMessage({
+      const res = await this.conversationsService.sendMessage({
         conversationId: payload.conversationId,
         senderId,
         senderRole: role,
@@ -190,26 +197,33 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         replyToMessageId: payload.replyToMessageId,
         attachment,
       });
+      message = res.message;
+      deduped = res.deduped;
+    } catch (err) {
+      // The message was NOT persisted — this is the only legitimate failed ack.
+      this.logger.warn(`chat:send persistence failed cid=${clientMessageId}: ${(err as Error).message}`);
+      const code = this.classifySendError(err);
+      return { ok: false, clientMessageId, code, error: this.safeErrorMessage(code) };
+    }
 
-      // A duplicate (retry / reconnect replay) is already broadcast and counted.
-      // Just ack the sender so its optimistic item reconciles — no second
-      // broadcast, no double unread/notification.
-      if (deduped) {
-        return { ok: true, clientMessageId, message };
-      }
+    // Message is durably persisted. Lock the success ack right here.
+    const ack: import('@karamooziyar/shared').SocketChatSendAck = { ok: true, clientMessageId, message };
 
-      // Broadcast to the room EXCLUDING the sender — the sender reconciles via
-      // this ack, so it never receives a duplicate echo of its own message.
+    // A duplicate (retry / reconnect replay) was already broadcast & counted on
+    // the first delivery — ack so the sender reconciles, but skip side-effects.
+    if (deduped) return ack;
+
+    // ── STAGE 2: BEST-EFFORT SIDE EFFECTS (must NEVER affect the ack) ─────────
+    try {
+      // Broadcast to the room EXCLUDING the sender (sender reconciles via ack).
       const room = SOCKET_ROOMS.conversation(payload.conversationId);
       client.to(room).emit(SOCKET_EVENTS.CHAT_MESSAGE_NEW, message);
 
-      // Update admin's conversation list
       const conv = role === 'USER'
         ? await this.conversationsService.findForUser(senderId)
         : await this.conversationsService.findOneById(payload.conversationId);
       this.server.to(SOCKET_ROOMS.admin()).emit(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, conv);
 
-      // ── Notify the receiving side (in-app + web push) ──────────────────────
       const preview = this.messagePreview(payload.type, payload.body);
       const createdAt = message.createdAt;
 
@@ -242,16 +256,13 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           .sendToUser(recipientId, { title: 'مدیریت مرکز', body: preview, url: '/chat', tag: `conv-${payload.conversationId}` })
           .catch((err) => this.logger.warn(`Push to user failed: ${String(err)}`));
       }
-
-      // Durable success ack — only returned AFTER the transaction committed.
-      return { ok: true, clientMessageId, message };
     } catch (err) {
-      // Surface a typed, non-fatal failure to the sender (kept visible + retryable);
-      // do NOT emit CHAT_ERROR for sends — that path is for global UI errors.
-      this.logger.warn(`chat:send failed cid=${clientMessageId}: ${(err as Error).message}`);
-      const code = this.classifySendError(err);
-      return { ok: false, clientMessageId, code, error: this.safeErrorMessage(code) };
+      // Side-effect failed AFTER durable persistence — log only. The sender still
+      // gets ok:true (its message is safe); missed realtime self-heals on refetch.
+      this.logger.warn(`chat:send post-persist side-effect failed cid=${clientMessageId}: ${(err as Error).message}`);
     }
+
+    return ack;
   }
 
   /** Map an internal error to a typed, client-safe send error code. */

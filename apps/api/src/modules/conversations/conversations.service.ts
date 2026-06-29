@@ -1,6 +1,7 @@
 import {
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type {
@@ -43,6 +44,8 @@ type MessageWithRelations = Message & {
 
 @Injectable()
 export class ConversationsService {
+  private readonly logger = new Logger(ConversationsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   // ─── Admin: list conversations ──────────────────────────────
@@ -427,16 +430,54 @@ export class ConversationsService {
   }
 
   async markSeen(conversationId: string, messageId: string, userId: string): Promise<{ messageId: string; seenAt: string }> {
+    // ── INVARIANT: seen bookkeeping is NON-CRITICAL. ──────────────────────────
+    // Root-cause of the production `message_seen_messageId_fkey` (P2003):
+    //   • The client can emit `chat:seen` with a clientMessageId (optimistic temp
+    //     id, e.g. "cm_abc") before the server has persisted the message.
+    //   • That id does NOT exist in `messages.id`; only in `messages.clientMessageId`.
+    //   • Calling messageSeen.upsert({ messageId: "cm_abc" }) → FK violation.
+    //
+    // Fix (two-layer defence):
+    //   1. Guard: only proceed if `messageId` matches a real persisted `messages.id`
+    //      in this conversation.  The FK constraint is on `messages.id`, so we
+    //      MUST use `id:` not `clientMessageId:` here.  We do NOT filter by
+    //      deletedAt because a soft-deleted row still satisfies the FK; we record
+    //      the seen only for visible messages (deletedAt: null) as a UX choice.
+    //   2. Catch: if a rare TOCTOU hard-delete or concurrent race causes P2003
+    //      despite the guard, log it (never rethrow — seen is best-effort).
+    //
+    // This function MUST always return a value (never throw) so callers can ack
+    // a persisted message as ok regardless of seen bookkeeping outcome.
+    const seenAt = new Date().toISOString();
+
+    // Guard 1: `messageId` must exist as a real server row in this conversation.
+    // This is the only value that satisfies the FK on `message_seen.messageId`.
+    const exists = await this.prisma.message.findFirst({
+      where: { id: messageId, conversationId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!exists) {
+      // `messageId` is either an optimistic clientMessageId, belongs to a
+      // different conversation, or is a soft-deleted message — skip silently.
+      return { messageId, seenAt };
+    }
+
     try {
       await this.prisma.messageSeen.upsert({
-        where: { messageId_userId: { messageId, userId } },
-        create: { messageId, userId },
+        where: { messageId_userId: { messageId: exists.id, userId } },
+        create: { messageId: exists.id, userId },
         update: {},
       });
-    } catch {
-      // P2002: unique constraint — already seen, which is fine
+    } catch (err) {
+      // P2002: already seen (unique conflict) — harmless, swallow.
+      // P2003: FK violation despite guard (race with hard-delete) — log, swallow.
+      // Any other DB error — also log and swallow; seen is best-effort.
+      this.logger.warn(
+        `markSeen ignored non-critical error (conv=${conversationId} msg=${messageId}): ${(err as Error).message}`,
+      );
     }
-    return { messageId, seenAt: new Date().toISOString() };
+
+    return { messageId, seenAt };
   }
 
   async markMessagesAsRead(conversationId: string, userId: string, role: string): Promise<void> {

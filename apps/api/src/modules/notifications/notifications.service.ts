@@ -51,13 +51,19 @@ export class NotificationsService {
    */
   private async notifyInactiveUsers(threshold: Date): Promise<void> {
     const db = anyPrisma(this.prisma);
+    // NOTE: `phoneNumber: { not: null }` is rejected by Prisma's query engine for
+    // nullable String fields. The correct null-check filter on a String? column is
+    // `NOT: { phoneNumber: null }` (top-level NOT wrapper) which generates
+    // `WHERE NOT ("phoneNumber" IS NULL)` = `WHERE "phoneNumber" IS NOT NULL`.
+    // We also guard at runtime (`if (!user.phoneNumber) continue`) as a second line
+    // of defence so this query is purely an optimisation, not a correctness gate.
     const conversations = await db.conversation.findMany({
       where: {
         unreadByUser: { gt: 0 },
         user: {
           isActive: true,
           deletedAt: null,
-          phoneNumber: { not: null },
+          NOT: { phoneNumber: null },
           OR: [
             { lastSeenAt: null },
             { lastSeenAt: { lt: threshold } },
@@ -92,13 +98,14 @@ export class NotificationsService {
 
     if (conversations.length === 0) return;
 
-    // Find all active admins who haven't been seen in 24h
+    // Find all active admins who haven't been seen in 24h.
+    // Use `NOT: { phoneNumber: null }` — see note in notifyInactiveUsers above.
     const admins = await db.user.findMany({
       where: {
         role: 'ADMIN',
         isActive: true,
         deletedAt: null,
-        phoneNumber: { not: null },
+        NOT: { phoneNumber: null },
         OR: [{ lastSeenAt: null }, { lastSeenAt: { lt: threshold } }],
       },
       select: { id: true, phoneNumber: true },

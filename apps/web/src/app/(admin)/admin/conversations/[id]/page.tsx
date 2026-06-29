@@ -17,7 +17,7 @@ import { UserAvatar } from '@/components/shared/UserAvatar';
 import { getSocket } from '@/lib/socket-client';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import type { ConversationSummaryDto, MessageDto } from '@karamooziyar/shared';
-import { cn, isSameDay, formatDayLabel } from '@/lib/utils';
+import { cn, isSameDay, formatDayLabel, lastSeenableMessageId } from '@/lib/utils';
 import { goBackOrReplace } from '@/lib/navigation';
 import { toast } from 'sonner';
 import { ArrowRight, ChevronUp } from 'lucide-react';
@@ -82,9 +82,10 @@ export default function AdminConversationPage() {
 
   useEffect(() => {
     if (!conversationId || messages.length === 0) return;
-    const socket = getSocket();
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg) socket.emit(SOCKET_EVENTS.CHAT_SEEN, { conversationId, messageId: lastMsg.id });
+    // Only mark a DURABLY PERSISTED message as seen (never an optimistic/temp id,
+    // which would trigger a messageSeen FK error server-side).
+    const seenId = lastSeenableMessageId(messages);
+    if (seenId) getSocket().emit(SOCKET_EVENTS.CHAT_SEEN, { conversationId, messageId: seenId });
   }, [conversationId, messages]);
 
   const handleDelete = (messageId: string) => {

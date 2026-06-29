@@ -73,6 +73,27 @@ export function formatDayLabel(dateStr: string | Date): string {
   return new Intl.DateTimeFormat('fa-IR', { year: 'numeric', month: 'long', day: 'numeric' }).format(d);
 }
 
+/**
+ * Newest message id that is SAFE to mark as seen: a durably persisted server
+ * message. Never returns an optimistic/pending/failed local item — whose `id`
+ * is still the temporary clientMessageId and has no `messages` row yet, which
+ * would make the server's messageSeen.upsert raise a foreign-key error
+ * (message_seen_messageId_fkey). Returns null when nothing qualifies.
+ */
+export function lastSeenableMessageId(
+  messages: Array<{ id: string; clientMessageId?: string | null; deliveryState?: string }>,
+): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!m) continue;
+    const ds = m.deliveryState;
+    const pending = ds === 'queued' || ds === 'uploading' || ds === 'sending' || ds === 'failed';
+    const optimistic = m.clientMessageId != null && m.id === m.clientMessageId;
+    if (!pending && !optimistic) return m.id;
+  }
+  return null;
+}
+
 export function isImageMime(mimeType: string): boolean {
   return mimeType.startsWith('image/');
 }

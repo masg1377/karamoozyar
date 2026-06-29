@@ -16,7 +16,7 @@ import { getSocket } from '@/lib/socket-client';
 import api from '@/lib/api-client';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import type { ConversationDetailDto, MessageDto } from '@karamooziyar/shared';
-import { isSameDay, formatDayLabel } from '@/lib/utils';
+import { isSameDay, formatDayLabel, lastSeenableMessageId } from '@/lib/utils';
 import { goBackOrReplace } from '@/lib/navigation';
 import { toast } from 'sonner';
 import { ChevronUp, Shield } from 'lucide-react';
@@ -81,9 +81,11 @@ export default function UserChatPage() {
   // (سرور بعدش unreadByUser را صفر و conversation:updated را emit می‌کند → badge/نوتیف پاک می‌شود)
   useEffect(() => {
     if (!conversationId || messages.length === 0) return;
-    const socket = getSocket();
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg) socket.emit(SOCKET_EVENTS.CHAT_SEEN, { conversationId, messageId: lastMsg.id });
+    // Only mark a DURABLY PERSISTED message as seen. Emitting the newest message
+    // blindly could send an optimistic/temp id (e.g. our own in-flight send),
+    // which would hit a messageSeen FK error server-side.
+    const seenId = lastSeenableMessageId(messages);
+    if (seenId) getSocket().emit(SOCKET_EVENTS.CHAT_SEEN, { conversationId, messageId: seenId });
   }, [conversationId, messages]);
 
   const handleDelete = (messageId: string) => {
