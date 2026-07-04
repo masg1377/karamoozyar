@@ -74,8 +74,10 @@ vi.mock('./api-client', () => ({
   refreshAccessToken: vi.fn(),
 }));
 
-const { sendText, retryMessage, canRetry, __resetOutboxForTests } = await import('./outbox');
+const { sendText, sendMedia, retryMessage, canRetry, __resetOutboxForTests } = await import('./outbox');
 const { useChatStore } = await import('@/store/chat.store');
+const { default: apiClient } = await import('./api-client');
+const { MessageType } = await import('@karamooziyar/shared');
 
 const SENDER = { id: 'u1', firstName: 'Ali', lastName: 'Rezaei' };
 const CONV = 'conv-1';
@@ -119,6 +121,10 @@ beforeEach(() => {
   fakeSocket.reset();
   __resetOutboxForTests();
   useChatStore.setState({ messages: {}, conversations: [], typingUsers: {}, hasMore: {}, nextCursor: {} });
+  vi.mocked(apiClient.post).mockReset();
+  vi.mocked(apiClient.post).mockResolvedValue({
+    data: { data: { fileKey: 'key-1', fileName: 'photo.png', mimeType: 'image/png', fileSize: 1234 } },
+  });
 });
 
 afterEach(() => {
@@ -242,5 +248,32 @@ describe('outbox — connectivity vs. real failures', () => {
     expect(list[0]!.deliveryState).toBe('sent');
     expect(list[0]!.clientMessageId).toBe(cid);
     expect(list[0]!.id).toBe(`srv-${cid}`);
+  });
+
+  it('media send: an awaiting-reconnect retry does not re-upload an already-uploaded file', async () => {
+    fakeSocket.connected = false;
+    const file = new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' });
+    sendMedia({ conversationId: CONV, type: MessageType.IMAGE, file, sender: SENDER });
+    const cid = lastMessage(CONV).clientMessageId!;
+
+    // Let the (mocked) upload promise resolve, then exhaust the connect-wait.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(lastMessage(CONV).deliveryState).toBe('awaiting-reconnect');
+    expect(apiClient.post).toHaveBeenCalledTimes(1); // uploaded exactly once
+
+    fakeSocket.connected = true;
+    fakeSocket.simulateConnect();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fakeSocket.pendingAcks).toHaveLength(1); // the retry reached emit
+    expect(apiClient.post).toHaveBeenCalledTimes(1); // still once — no re-upload on retry
+
+    fakeSocket.resolveOldestAck({ ok: true, clientMessageId: cid, message: serverMessageFor(cid) });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(lastMessage(CONV).deliveryState).toBe('sent');
+    expect(apiClient.post).toHaveBeenCalledTimes(1); // confirmed: exactly one upload for the whole lifecycle
   });
 });

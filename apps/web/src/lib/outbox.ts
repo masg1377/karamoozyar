@@ -72,6 +72,14 @@ interface MediaInput {
   replyTo: MessageDto | null;
   sender: OutboxSender;
   createdAt: string;
+  /**
+   * Cached result of a prior successful upload for this same clientMessageId.
+   * Set once the upload step succeeds; checked before uploading again so an
+   * automatic reconnect retry or a manual retry (both of which re-run this
+   * exact input) never re-uploads bytes that already landed in storage —
+   * only the send/ack step is retried.
+   */
+  uploadedFile: UploadResponseDto | null;
 }
 
 type OutgoingInput = TextInput | MediaInput;
@@ -272,15 +280,24 @@ async function performSend(input: OutgoingInput): Promise<SendOutcome> {
     let upload: UploadResponseDto | undefined;
 
     if (input.kind === 'media') {
-      store.setDeliveryState(input.conversationId, cid, 'uploading');
-      const form = new FormData();
-      form.append('file', input.file);
-      const res = await api.post<{ data: UploadResponseDto }>(
-        `/uploads/message-attachment?conversationId=${input.conversationId}`,
-        form,
-        { headers: { 'Content-Type': 'multipart/form-data' } },
-      );
-      upload = res.data.data;
+      if (input.uploadedFile) {
+        // Already uploaded on a prior attempt (e.g. the ack step failed after
+        // a successful upload) — reuse it. Only the send/ack is retried, never
+        // the bytes: avoids re-uploading on every automatic reconnect cycle
+        // and the orphaned-storage-object risk that would come with it.
+        upload = input.uploadedFile;
+      } else {
+        store.setDeliveryState(input.conversationId, cid, 'uploading');
+        const form = new FormData();
+        form.append('file', input.file);
+        const res = await api.post<{ data: UploadResponseDto }>(
+          `/uploads/message-attachment?conversationId=${input.conversationId}`,
+          form,
+          { headers: { 'Content-Type': 'multipart/form-data' } },
+        );
+        upload = res.data.data;
+        input.uploadedFile = upload; // cache on the shared outbox entry for any future retry
+      }
     }
 
     store.setDeliveryState(input.conversationId, cid, 'sending');
@@ -461,6 +478,7 @@ export function sendMedia(args: {
     replyTo: args.replyTo ?? null,
     sender: args.sender,
     createdAt: new Date().toISOString(),
+    uploadedFile: null,
   };
   outbox.set(input.clientMessageId, input);
   useChatStore.getState().insertOptimistic(args.conversationId, baseOptimistic(input));
