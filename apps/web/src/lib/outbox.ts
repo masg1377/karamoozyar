@@ -2,6 +2,7 @@
 
 import api from './api-client';
 import { getSocket } from './socket-client';
+import { socketDiagnostics } from './socket-diagnostics';
 import { useChatStore } from '@/store/chat.store';
 import { generateClientMessageId, baseMimeType, extensionForMime } from './utils';
 import {
@@ -17,6 +18,7 @@ import type {
   UploadResponseDto,
 } from '@karamooziyar/shared';
 import type { ChatMessage } from '@/store/chat.store';
+import type { Socket } from 'socket.io-client';
 
 /**
  * Outbox — the single source of truth for sending and retrying chat messages.
@@ -30,6 +32,10 @@ import type { ChatMessage } from '@/store/chat.store';
  */
 
 const ACK_TIMEOUT_MS = 12_000;
+// Bounded wait for a real `connect` before giving up on THIS attempt. Must be
+// short relative to ACK_TIMEOUT_MS so a stalled reconnect fails fast instead
+// of silently eating the whole ack budget.
+const CONNECT_WAIT_MS = 5_000;
 
 export interface OutboxSender {
   id: string;
@@ -113,10 +119,65 @@ function baseOptimistic(input: OutgoingInput): ChatMessage {
   };
 }
 
-/** Emit CHAT_SEND and await a durable, typed ack with a bounded timeout. */
-function emitSend(payload: SocketChatSendPayload): Promise<SocketChatSendAck> {
+/**
+ * Resolve once the socket is actually connected, or once `timeoutMs` elapses.
+ *
+ * Never trusts `socket.active` as a proxy for "a connect is imminent" — that
+ * flag stays true for the entire lifetime of the automatic-reconnect backoff,
+ * including while that backoff timer is stalled (backgrounded/suspended tab,
+ * OS-throttled timers, a wedged transport). Instead this always issues an
+ * explicit `socket.connect()` — a documented no-op if a connection attempt is
+ * already in flight — and waits on the real `connect` event with a hard
+ * bound, so a stuck Manager can't stall a retry indefinitely.
+ */
+function waitForConnection(socket: Socket, timeoutMs: number): Promise<boolean> {
+  if (socket.connected) return Promise.resolve(true);
+
   return new Promise((resolve) => {
-    const socket = getSocket();
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.off('connect', onConnect);
+      resolve(ok);
+    };
+    const onConnect = () => finish(true);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+
+    socket.once('connect', onConnect);
+    socket.connect();
+  });
+}
+
+/**
+ * Emit CHAT_SEND and await a durable, typed ack with a bounded timeout.
+ *
+ * Buffered-emit-on-reconnect is NOT relied on as the recovery path: if the
+ * socket isn't connected right now, we explicitly drive a connect attempt and
+ * wait a bounded amount of time for it. If that doesn't land, we fail this
+ * attempt immediately with a real socket-state reason instead of silently
+ * queuing the emit and burning the full ack timeout.
+ */
+async function emitSend(payload: SocketChatSendPayload): Promise<SocketChatSendAck> {
+  const socket = getSocket();
+
+  if (!socket.connected) {
+    const connected = await waitForConnection(socket, CONNECT_WAIT_MS);
+    if (!connected) {
+      socketDiagnostics.reconnectFailed(payload.clientMessageId, socket.id);
+      return {
+        ok: false,
+        clientMessageId: payload.clientMessageId,
+        code: 'INTERNAL',
+        error: 'socket-not-connected',
+      };
+    }
+  }
+
+  socketDiagnostics.sendEmitted(payload.clientMessageId, socket.id);
+
+  return new Promise((resolve) => {
     let settled = false;
     const finish = (ack: SocketChatSendAck) => {
       if (settled) return;
@@ -124,22 +185,21 @@ function emitSend(payload: SocketChatSendPayload): Promise<SocketChatSendAck> {
       clearTimeout(timer);
       resolve(ack);
     };
-    const timer = setTimeout(
-      () =>
-        finish({
-          ok: false,
-          clientMessageId: payload.clientMessageId,
-          code: 'INTERNAL',
-          error: 'timeout',
-        }),
-      ACK_TIMEOUT_MS,
-    );
-    // Socket.IO buffers the emit while disconnected and flushes on reconnect;
-    // nudge a connect attempt so a queued send is delivered promptly.
-    if (!socket.connected && !socket.active) socket.connect();
-    socket.emit(SOCKET_EVENTS.CHAT_SEND, payload, (ack: SocketChatSendAck) =>
-      finish(ack ?? { ok: false, clientMessageId: payload.clientMessageId, code: 'INTERNAL', error: 'no-ack' }),
-    );
+    const timer = setTimeout(() => {
+      socketDiagnostics.ackTimeout(payload.clientMessageId, socket.id);
+      finish({
+        ok: false,
+        clientMessageId: payload.clientMessageId,
+        code: 'INTERNAL',
+        error: 'timeout',
+      });
+    }, ACK_TIMEOUT_MS);
+    socket.emit(SOCKET_EVENTS.CHAT_SEND, payload, (ack: SocketChatSendAck) => {
+      const resolved: SocketChatSendAck =
+        ack ?? { ok: false, clientMessageId: payload.clientMessageId, code: 'INTERNAL', error: 'no-ack' };
+      socketDiagnostics.ackReceived(payload.clientMessageId, socket.id, resolved.ok, resolved.code);
+      finish(resolved);
+    });
   });
 }
 
@@ -274,6 +334,8 @@ export function retryMessage(conversationId: string, clientMessageId: string): v
   const list = state.messages[conversationId] ?? [];
   const current = list.find((m) => m.clientMessageId === clientMessageId || m.id === clientMessageId);
   if (current && current.deliveryState !== 'failed') return; // only retry failed
+  const socket = getSocket();
+  socketDiagnostics.retryAttempt(clientMessageId, socket.id, socket.connected);
   state.setDeliveryState(conversationId, clientMessageId, input.kind === 'media' ? 'uploading' : 'sending');
   void run(input);
 }
