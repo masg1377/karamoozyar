@@ -219,8 +219,9 @@ export function MessageBubble({
   const cm = message as ChatMessage;
   const state = cm.deliveryState;
   const isSending = state === 'queued' || state === 'uploading' || state === 'sending';
+  const isAwaitingReconnect = state === 'awaiting-reconnect';
   const isFailed = state === 'failed';
-  const isUnconfirmed = isSending || isFailed; // not yet durably persisted
+  const isUnconfirmed = isSending || isAwaitingReconnect || isFailed; // not yet durably persisted
   const canCopy  = !isUnconfirmed && message.type === 'TEXT' && !!message.body;
   const canEdit  = !isUnconfirmed && isMine && message.type === 'TEXT' && !!onEdit;
   const canDelete = !isUnconfirmed && !!onDelete;
@@ -418,9 +419,12 @@ export function MessageBubble({
               )}
               <span className={cn('text-xs', isMine ? 'text-white/60' : 'text-gray-400')}>{formatTime(message.createdAt)}</span>
               {isMine && !isFailed && (
-                <span className="text-white/70">
-                  {isSending
-                    ? <Clock className="w-3 h-3 inline opacity-70" />
+                <span
+                  className="text-white/70"
+                  title={isAwaitingReconnect ? 'در انتظار اتصال مجدد…' : undefined}
+                >
+                  {isSending || isAwaitingReconnect
+                    ? <Clock className={cn('w-3 h-3 inline opacity-70', isAwaitingReconnect && 'animate-pulse')} />
                     : message.status === 'SEEN'
                       ? <CheckCheck className="w-3.5 h-3.5 inline" />
                       : <Check className="w-3.5 h-3.5 inline" />

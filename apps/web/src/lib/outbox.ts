@@ -20,6 +20,14 @@ import type {
 import type { ChatMessage } from '@/store/chat.store';
 import type { Socket } from 'socket.io-client';
 
+// Bound how long we wait for a reconnect before giving up on an
+// `awaiting-reconnect` message entirely (wall-clock cap, independent of the
+// reconnect-cycle cap below).
+const RECONNECT_MAX_WAIT_MS = 60_000;
+// Bound how many unsuccessful automatic reconnect-triggered retries a single
+// message may accumulate before it is given up on and marked `failed`.
+const RECONNECT_MAX_CYCLES = 3;
+
 /**
  * Outbox — the single source of truth for sending and retrying chat messages.
  *
@@ -161,6 +169,7 @@ function waitForConnection(socket: Socket, timeoutMs: number): Promise<boolean> 
  */
 async function emitSend(payload: SocketChatSendPayload): Promise<SocketChatSendAck> {
   const socket = getSocket();
+  ensureReconnectHook(socket);
 
   if (!socket.connected) {
     const connected = await waitForConnection(socket, CONNECT_WAIT_MS);
@@ -228,8 +237,34 @@ function buildPayload(input: OutgoingInput, upload?: UploadResponseDto): SocketC
   };
 }
 
-/** Run upload (media) + emit + ack, transitioning the optimistic message. */
-async function run(input: OutgoingInput): Promise<void> {
+/**
+ * True for an ack that failed because the transport itself never delivered
+ * it — never connected in time, or no ack arrived within the ack budget
+ * (the two failure modes `emitSend` can produce for connection loss:
+ * reconnect timeout / transport close / ping timeout all surface as one of
+ * these, since `emitSend` always drives an explicit connect+ack cycle rather
+ * than trusting socket.io's own buffered-emit-on-reconnect).
+ *
+ * False for anything the server actually looked at and rejected (VALIDATION,
+ * FORBIDDEN, NOT_FOUND, ATTACHMENT, or an explicit INTERNAL error body) — those
+ * are real failures and must never be treated as a connectivity blip.
+ */
+function isConnectivityFailure(ack: SocketChatSendAck): boolean {
+  return !ack.ok && ack.code === 'INTERNAL' && (ack.error === 'socket-not-connected' || ack.error === 'timeout');
+}
+
+type SendOutcome =
+  | { kind: 'ok'; message: MessageDto }
+  | { kind: 'connectivity' }
+  | { kind: 'failed' };
+
+/**
+ * Run upload (media) + emit + ack. Does NOT touch delivery state beyond the
+ * transient `uploading`/`sending` steps — the caller decides what a given
+ * outcome means for the message (first send vs. reconnect retry vs. manual
+ * retry all react differently to a connectivity outcome).
+ */
+async function performSend(input: OutgoingInput): Promise<SendOutcome> {
   const store = useChatStore.getState();
   const cid = input.clientMessageId;
 
@@ -251,15 +286,133 @@ async function run(input: OutgoingInput): Promise<void> {
     store.setDeliveryState(input.conversationId, cid, 'sending');
     const ack = await emitSend(buildPayload(input, upload));
 
-    if (ack.ok && ack.message) {
-      // Reconcile the optimistic item with the durable server row (dedup by id).
-      store.reconcile(input.conversationId, { ...(ack.message as ChatMessage), deliveryState: 'sent' });
-      outbox.delete(cid);
-    } else {
-      // Keep visible + retryable. Do NOT auto-retry in the background.
-      store.setDeliveryState(input.conversationId, cid, 'failed');
-    }
+    if (ack.ok && ack.message) return { kind: 'ok', message: ack.message };
+    if (isConnectivityFailure(ack)) return { kind: 'connectivity' };
+    return { kind: 'failed' };
   } catch {
+    // Upload threw (network error, validation, etc.) — a real failure, never
+    // an `awaiting-reconnect` candidate, per spec: upload failure fails now.
+    return { kind: 'failed' };
+  }
+}
+
+// ─── Reconnect tracking (awaiting-reconnect ⇄ failed) ──────────────────────────
+
+interface ReconnectEntry {
+  /** Unsuccessful automatic reconnect-triggered retries so far. */
+  cycles: number;
+  /** True while an automatic retry for this message is in flight, to make
+   *  sure a single message is never retried twice concurrently (e.g. two
+   *  `connect` events firing close together). */
+  retrying: boolean;
+  /** Wall-clock cap: forces `failed` even if `connect` never fires again. */
+  deadline: ReturnType<typeof setTimeout>;
+}
+
+const awaitingReconnect = new Map<string, ReconnectEntry>();
+
+/** First entry into `awaiting-reconnect` for this message: start its budget. */
+function enterAwaitingReconnect(conversationId: string, cid: string): void {
+  if (!awaitingReconnect.has(cid)) {
+    const deadline = setTimeout(() => forceFail(conversationId, cid), RECONNECT_MAX_WAIT_MS);
+    awaitingReconnect.set(cid, { cycles: 0, retrying: false, deadline });
+  }
+  useChatStore.getState().setDeliveryState(conversationId, cid, 'awaiting-reconnect');
+}
+
+function clearReconnectTracking(cid: string): void {
+  const entry = awaitingReconnect.get(cid);
+  if (!entry) return;
+  clearTimeout(entry.deadline);
+  awaitingReconnect.delete(cid);
+}
+
+function forceFail(conversationId: string, cid: string): void {
+  if (!awaitingReconnect.has(cid)) return; // already resolved by a retry
+  clearReconnectTracking(cid);
+  useChatStore.getState().setDeliveryState(conversationId, cid, 'failed');
+}
+
+/** Attempt one automatic retry for a single `awaiting-reconnect` message. */
+async function attemptReconnectRetry(cid: string): Promise<void> {
+  const entry = awaitingReconnect.get(cid);
+  const input = outbox.get(cid);
+  if (!entry || !input) {
+    clearReconnectTracking(cid);
+    return;
+  }
+  if (entry.retrying) return; // already retrying this cycle — never double-send
+  entry.retrying = true;
+
+  const store = useChatStore.getState();
+  const socket = getSocket();
+  socketDiagnostics.retryAttempt(cid, socket.id, socket.connected);
+  // performSend sets the transient uploading/sending state itself.
+  const outcome = await performSend(input);
+  entry.retrying = false;
+
+  if (outcome.kind === 'ok') {
+    clearReconnectTracking(cid);
+    store.reconcile(input.conversationId, { ...(outcome.message as ChatMessage), deliveryState: 'sent' });
+    outbox.delete(cid);
+    return;
+  }
+  if (outcome.kind === 'failed') {
+    clearReconnectTracking(cid);
+    store.setDeliveryState(input.conversationId, cid, 'failed');
+    return;
+  }
+
+  // Still a connectivity failure — count this cycle; the deadline timer set
+  // in enterAwaitingReconnect keeps running independently (60s wall clock).
+  const current = awaitingReconnect.get(cid);
+  if (!current) return; // deadline fired concurrently and already forced failed
+  current.cycles += 1;
+  if (current.cycles >= RECONNECT_MAX_CYCLES) {
+    clearReconnectTracking(cid);
+    store.setDeliveryState(input.conversationId, cid, 'failed');
+  } else {
+    store.setDeliveryState(input.conversationId, cid, 'awaiting-reconnect');
+  }
+}
+
+/** On a confirmed `connect`, retry every `awaiting-reconnect` message once. */
+function retryAllAwaitingReconnect(): void {
+  for (const cid of Array.from(awaitingReconnect.keys())) {
+    void attemptReconnectRetry(cid);
+  }
+}
+
+// Attach the reconnect-retry listener exactly once per socket instance (a
+// WeakSet, not a module boolean, so a fresh socket created after logout/
+// reconnectSocket() still gets the hook — see socket-client.ts).
+const reconnectHookSockets = new WeakSet<Socket>();
+function ensureReconnectHook(socket: Socket): void {
+  if (reconnectHookSockets.has(socket)) return;
+  reconnectHookSockets.add(socket);
+  socket.on('connect', retryAllAwaitingReconnect);
+}
+
+/** Run upload (media) + emit + ack, transitioning the optimistic message. */
+async function run(input: OutgoingInput): Promise<void> {
+  const store = useChatStore.getState();
+  const cid = input.clientMessageId;
+  const outcome = await performSend(input);
+
+  if (outcome.kind === 'ok') {
+    // Reconcile the optimistic item with the durable server row (dedup by id).
+    clearReconnectTracking(cid);
+    store.reconcile(input.conversationId, { ...(outcome.message as ChatMessage), deliveryState: 'sent' });
+    outbox.delete(cid);
+  } else if (outcome.kind === 'connectivity') {
+    // Transport-level failure, not a real rejection: keep the optimistic
+    // message visible as "awaiting reconnect" and let the connect listener
+    // retry it automatically — do NOT mark it failed yet.
+    enterAwaitingReconnect(input.conversationId, cid);
+  } else {
+    // Real failure (validation/forbidden/upload/malformed/explicit backend
+    // error). Keep visible + retryable. Do NOT auto-retry in the background.
+    clearReconnectTracking(cid);
     store.setDeliveryState(input.conversationId, cid, 'failed');
   }
 }
@@ -343,4 +496,16 @@ export function retryMessage(conversationId: string, clientMessageId: string): v
 /** True if a failed message can still be retried (its input is retained). */
 export function canRetry(clientMessageId: string): boolean {
   return outbox.has(clientMessageId);
+}
+
+/**
+ * Test-only: reset all module-scoped outbox/reconnect state between test
+ * cases. The outbox and reconnect-cycle tracking intentionally live at
+ * module scope in production (they must survive component remounts), which
+ * means they also persist across tests in the same file unless cleared.
+ * Never call this outside tests.
+ */
+export function __resetOutboxForTests(): void {
+  outbox.clear();
+  for (const cid of Array.from(awaitingReconnect.keys())) clearReconnectTracking(cid);
 }

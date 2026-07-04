@@ -17,6 +17,12 @@ export type DeliveryState =
   | 'queued'
   | 'uploading'
   | 'sending'
+  // Send could not complete because the socket transport is down (not
+  // connected / reconnect timed out / ack timed out due to connection
+  // loss). Distinct from `failed`: the server never rejected anything, so
+  // this is retried automatically (once) on the next `connect` instead of
+  // requiring a manual retry.
+  | 'awaiting-reconnect'
   | 'sent'
   | 'seen'
   | 'failed';
@@ -29,6 +35,7 @@ const PENDING_STATES: ReadonlySet<DeliveryState> = new Set<DeliveryState>([
   'queued',
   'uploading',
   'sending',
+  'awaiting-reconnect',
   'failed',
 ]);
 

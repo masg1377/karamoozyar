@@ -87,7 +87,8 @@ export function lastSeenableMessageId(
     const m = messages[i];
     if (!m) continue;
     const ds = m.deliveryState;
-    const pending = ds === 'queued' || ds === 'uploading' || ds === 'sending' || ds === 'failed';
+    const pending =
+      ds === 'queued' || ds === 'uploading' || ds === 'sending' || ds === 'awaiting-reconnect' || ds === 'failed';
     const optimistic = m.clientMessageId != null && m.id === m.clientMessageId;
     if (!pending && !optimistic) return m.id;
   }
