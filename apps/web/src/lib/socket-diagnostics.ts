@@ -24,6 +24,11 @@
 
 import type { Socket } from 'socket.io-client';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
+import {
+  persistDiagEvents,
+  markDiagEventsServerReceived,
+  diagnosticEventIdOf,
+} from './diagnostics-store';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -59,7 +64,11 @@ export type LifecycleEventName =
   | 'browser_offline'
   | 'visibilitychange'
   | 'pagehide'
-  | 'pageshow';
+  | 'pageshow'
+  // Internal, non-recursive marker for a diagnostics-subsystem failure
+  // (IndexedDB write failed, FS Access API unavailable/denied, …). The
+  // reason field carries a safe fixed code only.
+  | 'local_diag_error';
 
 /** One sanitized diagnostics event. Field set is a closed allowlist —
  *  mirrored by the server-side validator (client-diagnostics.util.ts). */
@@ -249,6 +258,7 @@ function record(partial: Partial<DiagEvent> & { kind: DiagEvent['kind'] }): void
     buffer.push(evt);
     if (buffer.length > MAX_BUFFER) buffer.splice(0, buffer.length - MAX_BUFFER);
     persist();
+    persistLocalFirst(evt);
     try {
       const label = evt.kind === 'lifecycle' ? evt.event : 'chat_send_phase';
       // eslint-disable-next-line no-console
@@ -260,6 +270,60 @@ function record(partial: Partial<DiagEvent> & { kind: DiagEvent['kind'] }): void
   } catch {
     /* diagnostics must never throw into the chat path */
   }
+}
+
+// ─── Local-first persistence (IndexedDB, see diagnostics-store.ts) ─────────────
+
+// Guards against recursive telemetry: while an internal diagnostics error is
+// being recorded, skip local persistence for that event, and report each
+// distinct internal failure reason at most once per JS boot.
+let suppressLocalPersist = false;
+const reportedInternalErrors = new Set<string>();
+let liveLogSink: ((evt: DiagEvent) => void) | null = null;
+
+/** Fire-and-forget: store the sanitized event locally BEFORE any server
+ *  delivery attempt. Failure is caught and reported exactly once. */
+function persistLocalFirst(evt: DiagEvent): void {
+  try {
+    if (liveLogSink) {
+      try {
+        liveLogSink(evt);
+      } catch {
+        /* live-log sink is optional convenience — never propagate */
+      }
+    }
+    if (suppressLocalPersist) return;
+    void persistDiagEvents([evt]).then((ok) => {
+      if (!ok) recordDiagInternalError('idb-write-failed');
+    });
+  } catch {
+    /* never throw into the chat path */
+  }
+}
+
+/**
+ * Record ONE safe, non-recursive `local_diag_error` lifecycle event for a
+ * diagnostics-subsystem failure. `reason` must be a fixed code — never a raw
+ * error message from storage/file APIs.
+ */
+export function recordDiagInternalError(reason: string): void {
+  try {
+    if (reportedInternalErrors.has(reason)) return;
+    reportedInternalErrors.add(reason);
+    suppressLocalPersist = true;
+    try {
+      lifecycle('local_diag_error', reason);
+    } finally {
+      suppressLocalPersist = false;
+    }
+  } catch {
+    /* never throw */
+  }
+}
+
+/** Register/unregister the optional live file-log sink (diagnostics-live-log.ts). */
+export function setLiveLogSink(sink: ((evt: DiagEvent) => void) | null): void {
+  liveLogSink = sink;
 }
 
 /** Record a socket/browser lifecycle event. */
@@ -330,12 +394,21 @@ function flushNow(): void {
     s.emit(
       SOCKET_EVENTS.CHAT_CLIENT_DIAGNOSTICS,
       { pageInstanceId, browserSessionId: getBrowserSessionId(), events },
-      (ack: { ok?: boolean } | undefined) => {
+      (ack: { ok?: boolean; acceptedIds?: string[] } | undefined) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         flushInFlight = false;
         if (ack && ack.ok === true) {
+          // Local records are kept until normal retention pruning — only the
+          // serverReceived flag flips, so an on-site export still shows the
+          // complete timeline including everything the server already has.
+          // Prefer the server's explicit acceptedIds; fall back to locally
+          // derived ids when talking to an older API build.
+          const ids = Array.isArray(ack.acceptedIds)
+            ? ack.acceptedIds.filter((id): id is string => typeof id === 'string')
+            : events.map((e) => diagnosticEventIdOf(e));
+          void markDiagEventsServerReceived(ids);
           // Clear ONLY confirmed events (anything recorded during the flush stays).
           buffer = buffer.filter((e) => e.seq > upToSeq);
           persist();
@@ -436,4 +509,7 @@ export function __resetDiagnosticsForTests(): void {
   }
   attachedSocket = null;
   cachedBsid = null;
+  suppressLocalPersist = false;
+  reportedInternalErrors.clear();
+  liveLogSink = null;
 }

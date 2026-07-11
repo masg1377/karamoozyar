@@ -51,19 +51,22 @@ export class NotificationsService {
    */
   private async notifyInactiveUsers(threshold: Date): Promise<void> {
     const db = anyPrisma(this.prisma);
-    // NOTE: `phoneNumber: { not: null }` is rejected by Prisma's query engine for
-    // nullable String fields. The correct null-check filter on a String? column is
-    // `NOT: { phoneNumber: null }` (top-level NOT wrapper) which generates
-    // `WHERE NOT ("phoneNumber" IS NULL)` = `WHERE "phoneNumber" IS NOT NULL`.
-    // We also guard at runtime (`if (!user.phoneNumber) continue`) as a second line
-    // of defence so this query is purely an optimisation, not a correctness gate.
+    // `phoneNumber` is a required (non-nullable) column — see schema.prisma:
+    // `phoneNumber String @unique`. Prisma only generates a nullable-field filter
+    // (e.g. `NOT: { phoneNumber: null }`) for `String?` columns; for a required
+    // `String` column the generated filter type has no `null` variant at all; the
+    // query engine validates this independently of TypeScript (which was bypassed
+    // here via `anyPrisma`) and rejects it at runtime with
+    // "Argument `phoneNumber` must not be null." — the production error this
+    // fixes. Since the column can never be null there is nothing to filter for at
+    // the query level; we still guard at runtime (`if (!user.phoneNumber) continue`)
+    // as defence-in-depth against dirty data (e.g. legacy rows, empty strings).
     const conversations = await db.conversation.findMany({
       where: {
         unreadByUser: { gt: 0 },
         user: {
           isActive: true,
           deletedAt: null,
-          NOT: { phoneNumber: null },
           OR: [
             { lastSeenAt: null },
             { lastSeenAt: { lt: threshold } },
@@ -76,14 +79,20 @@ export class NotificationsService {
     });
 
     for (const conv of conversations) {
-      const user = conv.user as { id: string; phoneNumber: string; lastSeenAt: Date | null };
+      const user = conv.user as { id: string; phoneNumber: string | null; lastSeenAt: Date | null };
       if (!user.phoneNumber) continue;
 
-      await this.sendIfNotAlreadySent({
-        userId: user.id,
-        conversationId: conv.id,
-        phone: user.phoneNumber,
-      });
+      try {
+        await this.sendIfNotAlreadySent({
+          userId: user.id,
+          conversationId: conv.id,
+          phone: user.phoneNumber,
+        });
+      } catch (err) {
+        // One bad recipient (SMS provider error, log-write failure, etc.) must
+        // never abort the rest of the scheduled batch.
+        this.logger.warn(`Inactivity notification failed for user=${user.id} conv=${conv.id}: ${String(err)}`);
+      }
     }
   }
 
@@ -99,13 +108,13 @@ export class NotificationsService {
     if (conversations.length === 0) return;
 
     // Find all active admins who haven't been seen in 24h.
-    // Use `NOT: { phoneNumber: null }` — see note in notifyInactiveUsers above.
+    // `phoneNumber` is non-nullable — see note in notifyInactiveUsers above; no
+    // query-level null filter exists (or is needed) for a required column.
     const admins = await db.user.findMany({
       where: {
         role: 'ADMIN',
         isActive: true,
         deletedAt: null,
-        NOT: { phoneNumber: null },
         OR: [{ lastSeenAt: null }, { lastSeenAt: { lt: threshold } }],
       },
       select: { id: true, phoneNumber: true },
@@ -113,11 +122,15 @@ export class NotificationsService {
 
     for (const admin of admins) {
       if (!admin.phoneNumber) continue;
-      await this.sendIfNotAlreadySent({
-        adminId: admin.id,
-        conversationId: null,
-        phone: admin.phoneNumber,
-      });
+      try {
+        await this.sendIfNotAlreadySent({
+          adminId: admin.id,
+          conversationId: null,
+          phone: admin.phoneNumber,
+        });
+      } catch (err) {
+        this.logger.warn(`Inactivity notification failed for admin=${admin.id}: ${String(err)}`);
+      }
     }
   }
 

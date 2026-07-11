@@ -174,7 +174,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   handleClientDiagnostics(
     @ConnectedSocket() client: AuthSocket,
     @MessageBody() payload: unknown,
-  ): { ok: boolean; error?: string } {
+  ): { ok: boolean; error?: string; acceptedIds?: string[] } {
     if (!client.user) return { ok: false, error: 'unauthenticated' };
 
     const data = client.data as Record<string, unknown>;
@@ -215,7 +215,16 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         events: result.batch.events,
       }),
     );
-    return { ok: true };
+
+    // Identify exactly which events were accepted so the client can flip
+    // serverReceived per record. diagnosticEventId is deterministically
+    // `pageInstanceId:seq` — derived from wire fields, no format change.
+    // Stateless per batch: re-received ids (recovery retries after a lost
+    // ack) are simply logged and acked again — duplicates are tolerated.
+    const acceptedIds = result.batch.events.map(
+      (e) => `${String(e['pageInstanceId'])}:${String(e['seq'])}`,
+    );
+    return { ok: true, acceptedIds };
   }
 
   // ─── Chat Events ─────────────────────────────────────────────────────────────
@@ -314,9 +323,11 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       const room = SOCKET_ROOMS.conversation(payload.conversationId);
       client.to(room).emit(SOCKET_EVENTS.CHAT_MESSAGE_NEW, message);
 
-      const conv = role === 'USER'
-        ? await this.conversationsService.findForUser(senderId)
-        : await this.conversationsService.findOneById(payload.conversationId);
+      // Always fetch the full ConversationSummaryDto (includes `user`) — admins
+      // render this straight into their conversation list, which reads
+      // conv.user.firstName. findForUser() returns a stripped ConversationDetailDto
+      // (no `user`) meant for the trainee's own view, not for admin broadcast.
+      const conv = await this.conversationsService.findOneById(payload.conversationId);
       this.server.to(SOCKET_ROOMS.admin()).emit(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, conv);
 
       const preview = this.messagePreview(payload.type, payload.body);
@@ -336,7 +347,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           .sendToAdmins({ title: message.senderName, body: preview, url: href, tag: `conv-${payload.conversationId}` })
           .catch((err) => this.logger.warn(`Push to admins failed: ${String(err)}`));
       } else {
-        const recipientId = 'user' in conv ? conv.user.id : conv.userId;
+        const recipientId = conv.user.id;
         const userRoom = SOCKET_ROOMS.user(recipientId);
         this.server.to(userRoom).emit(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, conv);
         this.server.to(userRoom).emit(SOCKET_EVENTS.NOTIFICATION_NEW, {

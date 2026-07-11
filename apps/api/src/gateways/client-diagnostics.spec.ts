@@ -57,6 +57,13 @@ describe('validateDiagnosticsBatch', () => {
     expect(res.ok).toBe(true);
   });
 
+  it('accepts the local_diag_error lifecycle marker (client diagnostics-subsystem failures)', () => {
+    const res = validateDiagnosticsBatch(
+      batch([lifecycleEvent({ event: 'local_diag_error', reason: 'fs-api-unsupported' })]),
+    );
+    expect(res.ok).toBe(true);
+  });
+
   it('rejects malformed payloads (non-object, missing ids, empty/overfull events)', () => {
     expect(validateDiagnosticsBatch(null).ok).toBe(false);
     expect(validateDiagnosticsBatch('x').ok).toBe(false);
@@ -132,11 +139,12 @@ describe('ChatGateway.handleClientDiagnostics', () => {
     expect(logSpy).not.toHaveBeenCalled(); // rejected batches never reach the batch log
   });
 
-  it('accepts a valid batch and logs one structured JSON line with identity + events', () => {
+  it('accepts a valid batch, logs one structured JSON line, and acks the exact accepted diagnosticEventIds', () => {
     const gw = makeGateway();
     const client = makeClient({ sub: 'u1', nationalId: 'x', role: 'ADMIN' });
     const res = gw.handleClientDiagnostics(client, batch([lifecycleEvent(), chatSendEvent()]));
-    expect(res).toEqual({ ok: true });
+    // acceptedIds = pageInstanceId:seq per event — the client's diagnosticEventId.
+    expect(res).toEqual({ ok: true, acceptedIds: ['pi_abc123:1', 'pi_abc123:2'] });
 
     expect(logSpy).toHaveBeenCalledTimes(1);
     const logged = JSON.parse(logSpy.mock.calls[0][0] as string);
@@ -161,6 +169,23 @@ describe('ChatGateway.handleClientDiagnostics', () => {
       ok: false,
       error: 'rate-limited',
     });
+  });
+
+  it('tolerates re-received diagnosticEventIds (recovery resend after a lost ack)', () => {
+    const gw = makeGateway();
+    const client = makeClient({ sub: 'u1', nationalId: 'x', role: 'ADMIN' });
+    const payload = batch([lifecycleEvent()]);
+
+    const first = gw.handleClientDiagnostics(client, payload);
+    expect(first).toEqual({ ok: true, acceptedIds: ['pi_abc123:1'] });
+
+    // Same event again on a later batch (rate-limit window elapsed): the
+    // handler is stateless per batch — it logs and acks the same id again.
+    (client as unknown as { data: Record<string, unknown> }).data['diagLastBatchAt'] =
+      Date.now() - 60_000;
+    const second = gw.handleClientDiagnostics(client, payload);
+    expect(second).toEqual({ ok: true, acceptedIds: ['pi_abc123:1'] });
+    expect(logSpy).toHaveBeenCalledTimes(2);
   });
 
   it('stores pageInstanceId/browserSessionId on the socket for the disconnect log', () => {

@@ -1,6 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
 import { tokenStore, refreshAccessToken } from './api-client';
 import { attachSocketDiagnostics } from './socket-diagnostics';
+import { initDiagnosticsRecovery } from './diagnostics-recovery';
 
 const WS_URL = process.env['NEXT_PUBLIC_WS_URL'] ?? 'http://localhost:3001';
 
@@ -25,6 +26,10 @@ export function getSocket(): Socket {
     // Observation only (lifecycle ring buffer + [karamooz-chat-diag] console +
     // batched server telemetry). Never alters connect/reconnect behavior.
     attachSocketDiagnostics(socket);
+    // Startup recovery: re-deliver IndexedDB events the server never acked
+    // (e.g. recorded before a refresh while offline). Fully async, delayed,
+    // single-flight — never touches chat or connect behavior.
+    initDiagnosticsRecovery(socket);
 
     socket.on('disconnect', (reason) => {
       if (reason === 'io server disconnect') {

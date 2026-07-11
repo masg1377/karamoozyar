@@ -27,6 +27,9 @@ export const DIAG_LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
   'visibilitychange',
   'pagehide',
   'pageshow',
+  // Client-side diagnostics-subsystem failure marker (IndexedDB/FS Access API
+  // fallback) — reason carries a fixed safe code only.
+  'local_diag_error',
 ]);
 
 export const DIAG_CHAT_SEND_PHASES: ReadonlySet<string> = new Set([

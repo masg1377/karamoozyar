@@ -6,6 +6,7 @@ import { useAuthStore } from '@/store/auth.store';
 import api from '@/lib/api-client';
 import type { UserProfileDto } from '@karamooziyar/shared';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
+import { DiagnosticsPanel } from '@/components/admin/DiagnosticsPanel';
 import { toast } from 'sonner';
 import { ArrowLeft, Loader2, Pencil, UserRoundPen } from 'lucide-react';
 
@@ -234,6 +235,9 @@ export default function AdminProfilePage() {
           ذخیره اطلاعات
         </button>
       </div>
+
+      {/* ── گزارش عیب‌یابی اتصال (فقط ادمین) ── */}
+      <DiagnosticsPanel />
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>

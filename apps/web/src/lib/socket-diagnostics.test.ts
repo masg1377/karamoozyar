@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto'; // local-first persistence target (diagnostics-store)
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 
