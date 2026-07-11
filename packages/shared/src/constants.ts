@@ -62,6 +62,9 @@ export const SOCKET_EVENTS = {
   CHAT_SEEN: 'chat:seen',
   CHAT_EDIT: 'chat:edit',
   CHAT_DELETE: 'chat:delete',
+  // Sanitized client-side diagnostics batches (see apps/web socket-diagnostics.ts
+  // and apps/api client-diagnostics.util.ts). Never carries message content.
+  CHAT_CLIENT_DIAGNOSTICS: 'chat:client-diagnostics',
 
   NEWSLETTER_JOIN: 'newsletter:join',
   NEWSLETTER_SEEN: 'newsletter:seen',

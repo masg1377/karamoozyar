@@ -15,6 +15,7 @@ export declare const SOCKET_EVENTS: {
     readonly CHAT_SEEN: "chat:seen";
     readonly CHAT_EDIT: "chat:edit";
     readonly CHAT_DELETE: "chat:delete";
+    readonly CHAT_CLIENT_DIAGNOSTICS: "chat:client-diagnostics";
     readonly NEWSLETTER_JOIN: "newsletter:join";
     readonly NEWSLETTER_SEEN: "newsletter:seen";
     readonly NEWSLETTER_REACT: "newsletter:react";

@@ -2,7 +2,7 @@
 
 import api from './api-client';
 import { getSocket } from './socket-client';
-import { socketDiagnostics } from './socket-diagnostics';
+import { chatSendPhase, type SendOrigin } from './socket-diagnostics';
 import { useChatStore } from '@/store/chat.store';
 import { generateClientMessageId, baseMimeType, extensionForMime } from './utils';
 import {
@@ -175,24 +175,36 @@ function waitForConnection(socket: Socket, timeoutMs: number): Promise<boolean> 
  * attempt immediately with a real socket-state reason instead of silently
  * queuing the emit and burning the full ack timeout.
  */
-async function emitSend(payload: SocketChatSendPayload): Promise<SocketChatSendAck> {
+async function emitSend(
+  payload: SocketChatSendPayload,
+  diag: { origin: SendOrigin; attempt?: number },
+): Promise<SocketChatSendAck> {
   const socket = getSocket();
   ensureReconnectHook(socket);
+  const cid = payload.clientMessageId;
+  const base = {
+    clientMessageId: cid,
+    conversationId: payload.conversationId,
+    sendOrigin: diag.origin,
+    attempt: diag.attempt,
+  };
 
   if (!socket.connected) {
+    chatSendPhase({ ...base, phase: 'connect-wait-start' });
     const connected = await waitForConnection(socket, CONNECT_WAIT_MS);
     if (!connected) {
-      socketDiagnostics.reconnectFailed(payload.clientMessageId, socket.id);
+      chatSendPhase({ ...base, phase: 'connect-wait-timeout', reason: 'socket-not-connected' });
       return {
         ok: false,
-        clientMessageId: payload.clientMessageId,
+        clientMessageId: cid,
         code: 'INTERNAL',
         error: 'socket-not-connected',
       };
     }
+    chatSendPhase({ ...base, phase: 'connect-wait-success' });
   }
 
-  socketDiagnostics.sendEmitted(payload.clientMessageId, socket.id);
+  chatSendPhase({ ...base, phase: 'send-emitted', deliveryState: 'sending' });
 
   return new Promise((resolve) => {
     let settled = false;
@@ -203,18 +215,22 @@ async function emitSend(payload: SocketChatSendPayload): Promise<SocketChatSendA
       resolve(ack);
     };
     const timer = setTimeout(() => {
-      socketDiagnostics.ackTimeout(payload.clientMessageId, socket.id);
+      chatSendPhase({ ...base, phase: 'ack-timeout' });
       finish({
         ok: false,
-        clientMessageId: payload.clientMessageId,
+        clientMessageId: cid,
         code: 'INTERNAL',
         error: 'timeout',
       });
     }, ACK_TIMEOUT_MS);
     socket.emit(SOCKET_EVENTS.CHAT_SEND, payload, (ack: SocketChatSendAck) => {
       const resolved: SocketChatSendAck =
-        ack ?? { ok: false, clientMessageId: payload.clientMessageId, code: 'INTERNAL', error: 'no-ack' };
-      socketDiagnostics.ackReceived(payload.clientMessageId, socket.id, resolved.ok, resolved.code);
+        ack ?? { ok: false, clientMessageId: cid, code: 'INTERNAL', error: 'no-ack' };
+      if (resolved.ok) {
+        chatSendPhase({ ...base, phase: 'ack-success', deliveryState: 'sent' });
+      } else {
+        chatSendPhase({ ...base, phase: 'server-rejection', reason: resolved.code });
+      }
       finish(resolved);
     });
   });
@@ -272,9 +288,18 @@ type SendOutcome =
  * outcome means for the message (first send vs. reconnect retry vs. manual
  * retry all react differently to a connectivity outcome).
  */
-async function performSend(input: OutgoingInput): Promise<SendOutcome> {
+async function performSend(
+  input: OutgoingInput,
+  diag: { origin: SendOrigin; attempt?: number },
+): Promise<SendOutcome> {
   const store = useChatStore.getState();
   const cid = input.clientMessageId;
+  const base = {
+    clientMessageId: cid,
+    conversationId: input.conversationId,
+    sendOrigin: diag.origin,
+    attempt: diag.attempt,
+  };
 
   try {
     let upload: UploadResponseDto | undefined;
@@ -288,20 +313,33 @@ async function performSend(input: OutgoingInput): Promise<SendOutcome> {
         upload = input.uploadedFile;
       } else {
         store.setDeliveryState(input.conversationId, cid, 'uploading');
-        const form = new FormData();
-        form.append('file', input.file);
-        const res = await api.post<{ data: UploadResponseDto }>(
-          `/uploads/message-attachment?conversationId=${input.conversationId}`,
-          form,
-          { headers: { 'Content-Type': 'multipart/form-data' } },
-        );
-        upload = res.data.data;
-        input.uploadedFile = upload; // cache on the shared outbox entry for any future retry
+        chatSendPhase({ ...base, phase: 'upload-start', deliveryState: 'uploading' });
+        try {
+          const form = new FormData();
+          form.append('file', input.file);
+          const res = await api.post<{ data: UploadResponseDto }>(
+            `/uploads/message-attachment?conversationId=${input.conversationId}`,
+            form,
+            { headers: { 'Content-Type': 'multipart/form-data' } },
+          );
+          upload = res.data.data;
+          input.uploadedFile = upload; // cache on the shared outbox entry for any future retry
+          chatSendPhase({ ...base, phase: 'upload-success' });
+        } catch (err) {
+          // Status code only — never the URL, file name, or response body.
+          const status = (err as { response?: { status?: number } })?.response?.status;
+          chatSendPhase({
+            ...base,
+            phase: 'upload-error',
+            reason: status ? `http-${status}` : 'upload-network-error',
+          });
+          throw err;
+        }
       }
     }
 
     store.setDeliveryState(input.conversationId, cid, 'sending');
-    const ack = await emitSend(buildPayload(input, upload));
+    const ack = await emitSend(buildPayload(input, upload), diag);
 
     if (ack.ok && ack.message) return { kind: 'ok', message: ack.message };
     if (isConnectivityFailure(ack)) return { kind: 'connectivity' };
@@ -329,11 +367,19 @@ interface ReconnectEntry {
 const awaitingReconnect = new Map<string, ReconnectEntry>();
 
 /** First entry into `awaiting-reconnect` for this message: start its budget. */
-function enterAwaitingReconnect(conversationId: string, cid: string): void {
+function enterAwaitingReconnect(conversationId: string, cid: string, origin: SendOrigin): void {
   if (!awaitingReconnect.has(cid)) {
     const deadline = setTimeout(() => forceFail(conversationId, cid), RECONNECT_MAX_WAIT_MS);
     awaitingReconnect.set(cid, { cycles: 0, retrying: false, deadline });
   }
+  chatSendPhase({
+    clientMessageId: cid,
+    conversationId,
+    sendOrigin: origin,
+    phase: 'enter-awaiting-reconnect',
+    deliveryState: 'awaiting-reconnect',
+    attempt: awaitingReconnect.get(cid)?.cycles,
+  });
   useChatStore.getState().setDeliveryState(conversationId, cid, 'awaiting-reconnect');
 }
 
@@ -345,8 +391,18 @@ function clearReconnectTracking(cid: string): void {
 }
 
 function forceFail(conversationId: string, cid: string): void {
-  if (!awaitingReconnect.has(cid)) return; // already resolved by a retry
+  const entry = awaitingReconnect.get(cid);
+  if (!entry) return; // already resolved by a retry
   clearReconnectTracking(cid);
+  chatSendPhase({
+    clientMessageId: cid,
+    conversationId,
+    sendOrigin: 'auto-reconnect-retry',
+    phase: 'force-failed',
+    deliveryState: 'failed',
+    attempt: entry.cycles,
+    reason: 'reconnect-60s-cap-elapsed',
+  });
   useChatStore.getState().setDeliveryState(conversationId, cid, 'failed');
 }
 
@@ -362,10 +418,17 @@ async function attemptReconnectRetry(cid: string): Promise<void> {
   entry.retrying = true;
 
   const store = useChatStore.getState();
-  const socket = getSocket();
-  socketDiagnostics.retryAttempt(cid, socket.id, socket.connected);
+  const attempt = entry.cycles + 1;
+  chatSendPhase({
+    clientMessageId: cid,
+    conversationId: input.conversationId,
+    sendOrigin: 'auto-reconnect-retry',
+    phase: 'auto-retry-start',
+    deliveryState: 'awaiting-reconnect',
+    attempt,
+  });
   // performSend sets the transient uploading/sending state itself.
-  const outcome = await performSend(input);
+  const outcome = await performSend(input, { origin: 'auto-reconnect-retry', attempt });
   entry.retrying = false;
 
   if (outcome.kind === 'ok') {
@@ -387,6 +450,15 @@ async function attemptReconnectRetry(cid: string): Promise<void> {
   current.cycles += 1;
   if (current.cycles >= RECONNECT_MAX_CYCLES) {
     clearReconnectTracking(cid);
+    chatSendPhase({
+      clientMessageId: cid,
+      conversationId: input.conversationId,
+      sendOrigin: 'auto-reconnect-retry',
+      phase: 'force-failed',
+      deliveryState: 'failed',
+      attempt: current.cycles,
+      reason: 'reconnect-cycles-exhausted',
+    });
     store.setDeliveryState(input.conversationId, cid, 'failed');
   } else {
     store.setDeliveryState(input.conversationId, cid, 'awaiting-reconnect');
@@ -411,10 +483,10 @@ function ensureReconnectHook(socket: Socket): void {
 }
 
 /** Run upload (media) + emit + ack, transitioning the optimistic message. */
-async function run(input: OutgoingInput): Promise<void> {
+async function run(input: OutgoingInput, origin: SendOrigin): Promise<void> {
   const store = useChatStore.getState();
   const cid = input.clientMessageId;
-  const outcome = await performSend(input);
+  const outcome = await performSend(input, { origin });
 
   if (outcome.kind === 'ok') {
     // Reconcile the optimistic item with the durable server row (dedup by id).
@@ -425,7 +497,7 @@ async function run(input: OutgoingInput): Promise<void> {
     // Transport-level failure, not a real rejection: keep the optimistic
     // message visible as "awaiting reconnect" and let the connect listener
     // retry it automatically — do NOT mark it failed yet.
-    enterAwaitingReconnect(input.conversationId, cid);
+    enterAwaitingReconnect(input.conversationId, cid, origin);
   } else {
     // Real failure (validation/forbidden/upload/malformed/explicit backend
     // error). Keep visible + retryable. Do NOT auto-retry in the background.
@@ -453,7 +525,14 @@ export function sendText(args: {
   };
   outbox.set(input.clientMessageId, input);
   useChatStore.getState().insertOptimistic(args.conversationId, baseOptimistic(input));
-  void run(input);
+  chatSendPhase({
+    clientMessageId: input.clientMessageId,
+    conversationId: args.conversationId,
+    sendOrigin: 'new-message',
+    phase: 'optimistic-inserted',
+    deliveryState: 'sending',
+  });
+  void run(input, 'new-message');
 }
 
 export function sendMedia(args: {
@@ -482,7 +561,14 @@ export function sendMedia(args: {
   };
   outbox.set(input.clientMessageId, input);
   useChatStore.getState().insertOptimistic(args.conversationId, baseOptimistic(input));
-  void run(input);
+  chatSendPhase({
+    clientMessageId: input.clientMessageId,
+    conversationId: args.conversationId,
+    sendOrigin: 'new-message',
+    phase: 'optimistic-inserted',
+    deliveryState: 'sending',
+  });
+  void run(input, 'new-message');
 }
 
 /**
@@ -505,10 +591,15 @@ export function retryMessage(conversationId: string, clientMessageId: string): v
   const list = state.messages[conversationId] ?? [];
   const current = list.find((m) => m.clientMessageId === clientMessageId || m.id === clientMessageId);
   if (current && current.deliveryState !== 'failed') return; // only retry failed
-  const socket = getSocket();
-  socketDiagnostics.retryAttempt(clientMessageId, socket.id, socket.connected);
+  chatSendPhase({
+    clientMessageId,
+    conversationId,
+    sendOrigin: 'manual-retry',
+    phase: 'manual-retry-start',
+    deliveryState: current?.deliveryState,
+  });
   state.setDeliveryState(conversationId, clientMessageId, input.kind === 'media' ? 'uploading' : 'sending');
-  void run(input);
+  void run(input, 'manual-retry');
 }
 
 /** True if a failed message can still be retried (its input is retained). */

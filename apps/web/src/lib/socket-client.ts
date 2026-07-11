@@ -1,5 +1,6 @@
 import { io, type Socket } from 'socket.io-client';
 import { tokenStore, refreshAccessToken } from './api-client';
+import { attachSocketDiagnostics } from './socket-diagnostics';
 
 const WS_URL = process.env['NEXT_PUBLIC_WS_URL'] ?? 'http://localhost:3001';
 
@@ -20,6 +21,10 @@ export function getSocket(): Socket {
       reconnectionDelayMax: 5000,
       reconnectionAttempts: Infinity, // گوشی ممکن است مدت طولانی آفلاین/قفل باشد
     });
+
+    // Observation only (lifecycle ring buffer + [karamooz-chat-diag] console +
+    // batched server telemetry). Never alters connect/reconnect behavior.
+    attachSocketDiagnostics(socket);
 
     socket.on('disconnect', (reason) => {
       if (reason === 'io server disconnect') {

@@ -30,6 +30,10 @@ import {
   ReactionEmoji,
 } from '@karamooziyar/shared';
 import { WsJwtGuard } from '../modules/auth/guards/ws-jwt.guard';
+import {
+  validateDiagnosticsBatch,
+  DIAG_MIN_BATCH_INTERVAL_MS,
+} from './client-diagnostics.util';
 import { PushService } from '../modules/push/push.service';
 import { ConversationsService } from '../modules/conversations/conversations.service';
 import { NewsletterService } from '../modules/newsletter/newsletter.service';
@@ -111,16 +115,107 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       // Join newsletter room for everyone
       await client.join(SOCKET_ROOMS.newsletter());
 
-      this.logger.log(`Client connected: ${userId} (${role})`);
+      // Capture the disconnect reason for the enriched ws_disconnect log —
+      // Nest's handleDisconnect(client) does not receive the reason itself.
+      client.once('disconnecting', (reason) => {
+        (client.data as Record<string, unknown>)['disconnectReason'] = String(reason);
+      });
+
+      this.logger.log(
+        JSON.stringify({
+          evt: 'ws_connect',
+          socketId: client.id,
+          userId,
+          role,
+          transport: this.transportName(client),
+        }),
+      );
     } catch {
       client.disconnect();
     }
   }
 
   handleDisconnect(client: AuthSocket): void {
-    if (client.user) {
-      this.logger.log(`Client disconnected: ${client.user.sub}`);
+    const data = (client.data ?? {}) as Record<string, unknown>;
+    this.logger.log(
+      JSON.stringify({
+        evt: 'ws_disconnect',
+        socketId: client.id,
+        userId: client.user?.sub ?? null,
+        role: client.user?.role ?? null,
+        reason: data['disconnectReason'] ?? 'unknown',
+        transport: this.transportName(client),
+        // Present only after the client's first diagnostics batch on this socket.
+        pageInstanceId: data['pageInstanceId'] ?? null,
+        browserSessionId: data['browserSessionId'] ?? null,
+      }),
+    );
+  }
+
+  /** Engine transport name (websocket/polling) — best-effort, never throws. */
+  private transportName(client: Socket): string | null {
+    try {
+      return (
+        (client.conn as unknown as { transport?: { name?: string } })?.transport?.name ?? null
+      );
+    } catch {
+      return null;
     }
+  }
+
+  // ─── Client Diagnostics (observation only — no DB, no side effects) ──────────
+
+  /**
+   * Receives sanitized client diagnostics batches and logs them as one
+   * structured JSON line for PM2/API log correlation. Strictly validated
+   * (allowlisted keys/enums only), rate-limited per socket, never persisted.
+   */
+  @SubscribeMessage(SOCKET_EVENTS.CHAT_CLIENT_DIAGNOSTICS)
+  handleClientDiagnostics(
+    @ConnectedSocket() client: AuthSocket,
+    @MessageBody() payload: unknown,
+  ): { ok: boolean; error?: string } {
+    if (!client.user) return { ok: false, error: 'unauthenticated' };
+
+    const data = client.data as Record<string, unknown>;
+    const now = Date.now();
+    const last = typeof data['diagLastBatchAt'] === 'number' ? (data['diagLastBatchAt'] as number) : 0;
+    if (now - last < DIAG_MIN_BATCH_INTERVAL_MS) {
+      // ok:false → the client retains its buffer and retries later.
+      return { ok: false, error: 'rate-limited' };
+    }
+
+    const result = validateDiagnosticsBatch(payload);
+    if (!result.ok) {
+      this.logger.warn(
+        JSON.stringify({
+          evt: 'client_diag_rejected',
+          userId: client.user.sub,
+          socketId: client.id,
+          error: result.error,
+        }),
+      );
+      return { ok: false, error: 'invalid' };
+    }
+
+    data['diagLastBatchAt'] = now;
+    // Remember identity for the ws_disconnect log ("diagnostics handshake").
+    data['pageInstanceId'] = result.batch.pageInstanceId;
+    data['browserSessionId'] = result.batch.browserSessionId;
+
+    this.logger.log(
+      JSON.stringify({
+        evt: 'client_diag_batch',
+        userId: client.user.sub,
+        role: client.user.role,
+        socketId: client.id,
+        pageInstanceId: result.batch.pageInstanceId,
+        browserSessionId: result.batch.browserSessionId,
+        count: result.batch.events.length,
+        events: result.batch.events,
+      }),
+    );
+    return { ok: true };
   }
 
   // ─── Chat Events ─────────────────────────────────────────────────────────────

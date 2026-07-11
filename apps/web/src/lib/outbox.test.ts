@@ -68,6 +68,12 @@ vi.mock('./socket-client', () => ({
   reconnectSocket: vi.fn(),
 }));
 
+// Diagnostics are observation-only: mock to (a) assert the sendOrigin/phase
+// contract and (b) prove the outbox flow completes with telemetry replaced.
+vi.mock('./socket-diagnostics', () => ({
+  chatSendPhase: vi.fn(),
+}));
+
 vi.mock('./api-client', () => ({
   default: { post: vi.fn() },
   tokenStore: { getAccess: () => null, getRefresh: () => null, setAccess: vi.fn(), setRefresh: vi.fn(), clear: vi.fn() },
@@ -78,6 +84,12 @@ const { sendText, sendMedia, retryMessage, canRetry, __resetOutboxForTests } = a
 const { useChatStore } = await import('@/store/chat.store');
 const { default: apiClient } = await import('./api-client');
 const { MessageType } = await import('@karamooziyar/shared');
+const { chatSendPhase } = await import('./socket-diagnostics');
+
+type DiagCall = { phase: string; sendOrigin: string; clientMessageId: string };
+function diagCalls(): DiagCall[] {
+  return vi.mocked(chatSendPhase).mock.calls.map((c) => c[0] as DiagCall);
+}
 
 const SENDER = { id: 'u1', firstName: 'Ali', lastName: 'Rezaei' };
 const CONV = 'conv-1';
@@ -121,6 +133,7 @@ beforeEach(() => {
   fakeSocket.reset();
   __resetOutboxForTests();
   useChatStore.setState({ messages: {}, conversations: [], typingUsers: {}, hasMore: {}, nextCursor: {} });
+  vi.mocked(chatSendPhase).mockClear();
   vi.mocked(apiClient.post).mockReset();
   vi.mocked(apiClient.post).mockResolvedValue({
     data: { data: { fileKey: 'key-1', fileName: 'photo.png', mimeType: 'image/png', fileSize: 1234 } },
@@ -275,5 +288,76 @@ describe('outbox — connectivity vs. real failures', () => {
 
     expect(lastMessage(CONV).deliveryState).toBe('sent');
     expect(apiClient.post).toHaveBeenCalledTimes(1); // confirmed: exactly one upload for the whole lifecycle
+  });
+});
+
+describe('outbox — chat-send diagnostics (sendOrigin/phase contract)', () => {
+  it('a normal compose send logs sendOrigin new-message through insert → emit → ack', async () => {
+    fakeSocket.connected = true;
+    sendText({ conversationId: CONV, body: 'hi', sender: SENDER });
+    const cid = lastMessage(CONV).clientMessageId!;
+    fakeSocket.resolveOldestAck({ ok: true, clientMessageId: cid, message: serverMessageFor(cid) });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const calls = diagCalls();
+    const phases = calls.map((c) => `${c.sendOrigin}:${c.phase}`);
+    expect(phases).toContain('new-message:optimistic-inserted');
+    expect(phases).toContain('new-message:send-emitted');
+    expect(phases).toContain('new-message:ack-success');
+    expect(calls.every((c) => c.clientMessageId === cid)).toBe(true);
+    // diagnostics never delayed the send — message is already reconciled
+    expect(lastMessage(CONV).deliveryState).toBe('sent');
+  });
+
+  it('a manual Retry logs sendOrigin manual-retry starting with manual-retry-start', async () => {
+    fakeSocket.connected = true;
+    sendText({ conversationId: CONV, body: 'hi', sender: SENDER });
+    const cid = lastMessage(CONV).clientMessageId!;
+    fakeSocket.resolveOldestAck({ ok: false, clientMessageId: cid, code: 'VALIDATION', error: 'bad' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lastMessage(CONV).deliveryState).toBe('failed');
+
+    vi.mocked(chatSendPhase).mockClear();
+    retryMessage(CONV, cid);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const phases = diagCalls().map((c) => `${c.sendOrigin}:${c.phase}`);
+    expect(phases[0]).toBe('manual-retry:manual-retry-start');
+    expect(phases).toContain('manual-retry:send-emitted');
+  });
+
+  it('an automatic resend after reconnect logs sendOrigin auto-reconnect-retry', async () => {
+    fakeSocket.connected = false;
+    sendText({ conversationId: CONV, body: 'hi', sender: SENDER });
+    await vi.advanceTimersByTimeAsync(5_000); // connect-wait times out → awaiting-reconnect
+    expect(lastMessage(CONV).deliveryState).toBe('awaiting-reconnect');
+
+    const early = diagCalls().map((c) => `${c.sendOrigin}:${c.phase}`);
+    expect(early).toContain('new-message:connect-wait-start');
+    expect(early).toContain('new-message:connect-wait-timeout');
+    expect(early).toContain('new-message:enter-awaiting-reconnect');
+
+    vi.mocked(chatSendPhase).mockClear();
+    fakeSocket.connected = true;
+    fakeSocket.simulateConnect();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const phases = diagCalls().map((c) => `${c.sendOrigin}:${c.phase}`);
+    expect(phases[0]).toBe('auto-reconnect-retry:auto-retry-start');
+    expect(phases).toContain('auto-reconnect-retry:send-emitted');
+  });
+
+  it('the 60s reconnect cap logs force-failed', async () => {
+    fakeSocket.connected = false;
+    sendText({ conversationId: CONV, body: 'hi', sender: SENDER });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(lastMessage(CONV).deliveryState).toBe('awaiting-reconnect');
+
+    await vi.advanceTimersByTimeAsync(60_000); // wall-clock cap, no connect ever fires
+
+    expect(lastMessage(CONV).deliveryState).toBe('failed');
+    const forced = diagCalls().find((c) => c.phase === 'force-failed');
+    expect(forced).toBeDefined();
+    expect(forced!.sendOrigin).toBe('auto-reconnect-retry');
   });
 });
