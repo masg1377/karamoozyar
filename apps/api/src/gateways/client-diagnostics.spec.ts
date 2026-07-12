@@ -47,6 +47,24 @@ function chatSendEvent(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
+function socketRebuildEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    seq: 3,
+    ts: Date.now(),
+    kind: 'socket_rebuild',
+    phase: 'socket-rebuild-success',
+    oldSocketId: 'sock_1',
+    newSocketId: 'sock_2',
+    oldSocketGeneration: 1,
+    newSocketGeneration: 2,
+    rebuildReason: 'ack-timeout',
+    elapsedMs: 1200,
+    pageInstanceId: 'pi_abc123',
+    browserSessionId: 'bs_abc123',
+    ...overrides,
+  };
+}
+
 function batch(events: Record<string, unknown>[]): Record<string, unknown> {
   return { pageInstanceId: 'pi_abc123', browserSessionId: 'bs_abc123', events };
 }
@@ -78,6 +96,36 @@ describe('validateDiagnosticsBatch', () => {
     expect(validateDiagnosticsBatch(batch([chatSendEvent({ phase: 'exfiltrate' })])).ok).toBe(false);
     expect(validateDiagnosticsBatch(batch([chatSendEvent({ sendOrigin: 'hacker' })])).ok).toBe(false);
     expect(validateDiagnosticsBatch(batch([lifecycleEvent({ kind: 'other' })])).ok).toBe(false);
+  });
+
+  it('accepts a valid socket_rebuild event (zombie-socket recovery) with its sanitized metadata', () => {
+    const res = validateDiagnosticsBatch(batch([socketRebuildEvent()]));
+    expect(res.ok).toBe(true);
+  });
+
+  it('rejects a socket_rebuild event with an unknown phase', () => {
+    expect(validateDiagnosticsBatch(batch([socketRebuildEvent({ phase: 'exfiltrate' })])).ok).toBe(false);
+    expect(validateDiagnosticsBatch(batch([socketRebuildEvent({ phase: 'send-emitted' })])).ok).toBe(
+      false, // a chat_send phase is not valid on a socket_rebuild-kind event
+    );
+  });
+
+  it('accepts chat_send events carrying the new rebuild-recovery metadata fields', () => {
+    const res = validateDiagnosticsBatch(
+      batch([
+        chatSendEvent({
+          phase: 'fresh-socket-ack-timeout',
+          oldSocketId: 'sock_1',
+          newSocketId: 'sock_2',
+          oldSocketGeneration: 1,
+          newSocketGeneration: 2,
+          rebuildReason: 'ack-timeout',
+          elapsedMs: 8001,
+          failureReason: 'fresh-socket-ack-timeout',
+        }),
+      ]),
+    );
+    expect(res.ok).toBe(true);
   });
 
   it('rejects any event carrying content-like or sensitive keys', () => {

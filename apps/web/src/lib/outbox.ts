@@ -1,9 +1,15 @@
 'use client';
 
 import api from './api-client';
-import { getSocket } from './socket-client';
+import {
+  getSocket,
+  getSocketGeneration,
+  markSocketUnhealthy,
+  hardRebuildSocket,
+} from './socket-client';
 import { chatSendPhase, type SendOrigin } from './socket-diagnostics';
 import { useChatStore } from '@/store/chat.store';
+import { useAuthStore } from '@/store/auth.store';
 import { generateClientMessageId, baseMimeType, extensionForMime } from './utils';
 import {
   SOCKET_EVENTS,
@@ -20,14 +26,6 @@ import type {
 import type { ChatMessage } from '@/store/chat.store';
 import type { Socket } from 'socket.io-client';
 
-// Bound how long we wait for a reconnect before giving up on an
-// `awaiting-reconnect` message entirely (wall-clock cap, independent of the
-// reconnect-cycle cap below).
-const RECONNECT_MAX_WAIT_MS = 60_000;
-// Bound how many unsuccessful automatic reconnect-triggered retries a single
-// message may accumulate before it is given up on and marked `failed`.
-const RECONNECT_MAX_CYCLES = 3;
-
 /**
  * Outbox — the single source of truth for sending and retrying chat messages.
  *
@@ -35,15 +33,37 @@ const RECONNECT_MAX_CYCLES = 3;
  * failed message survives chat switches, component remounts, and reconnects.
  * Every outgoing item (text/image/file/voice) gets a stable `clientMessageId`
  * BEFORE anything is sent; that id is the optimistic message id AND the
- * server idempotency key, so manual retries and reconnect replays can never
+ * server idempotency key, so manual retries and automatic recovery can never
  * create duplicate rows.
+ *
+ * ── Zombie-socket recovery (production evidence) ────────────────────────────
+ * `socket.connected === true` is NOT sufficient proof the current transport
+ * can deliver outgoing events: a connected-looking socket (Engine.IO
+ * readyState "open", transport "websocket") can silently stop delivering
+ * CHAT_SEND events with no ack, no error, and no disconnect. Recovery from
+ * that state requires actually replacing the Socket.IO client (see
+ * `hardRebuildSocket` in socket-client.ts) — never just retrying on the same
+ * socket, and never trusting `socket.connected` at face value.
+ *
+ * Bounded policy per automatic send cycle:
+ *   - up to 8s waiting for a CHAT_SEND ack
+ *   - at most 1 hard socket rebuild (bounded to 5s to confirm a fresh connect)
+ *   - at most 2 CHAT_SEND emits total
+ *   - then fail clearly — never retry indefinitely, never rebuild repeatedly.
  */
 
-const ACK_TIMEOUT_MS = 12_000;
-// Bounded wait for a real `connect` before giving up on THIS attempt. Must be
-// short relative to ACK_TIMEOUT_MS so a stalled reconnect fails fast instead
-// of silently eating the whole ack budget.
-const CONNECT_WAIT_MS = 5_000;
+// Production timing. Kept as a mutable object (not bare consts) solely so
+// real-network integration/soak tests (real Socket.IO server + client, no
+// mocks) can scale the wall-clock budget down instead of literally waiting
+// 8+5+8 seconds per zombie message — the fake-timer unit tests are the ones
+// that verify these exact production values. Never overridden outside tests.
+let timing = {
+  CHAT_SEND_ACK_TIMEOUT_MS: 8_000,
+  NORMAL_RECONNECT_GRACE_MS: 3_000,
+  FRESH_SOCKET_CONNECT_TIMEOUT_MS: 5_000,
+};
+const MAX_HARD_SOCKET_REBUILDS_PER_SEND_CYCLE = 1;
+const MAX_CHAT_SEND_EMITS_PER_SEND_CYCLE = 2;
 
 export interface OutboxSender {
   id: string;
@@ -75,7 +95,7 @@ interface MediaInput {
   /**
    * Cached result of a prior successful upload for this same clientMessageId.
    * Set once the upload step succeeds; checked before uploading again so an
-   * automatic reconnect retry or a manual retry (both of which re-run this
+   * automatic recovery cycle or a manual retry (both of which re-run this
    * exact input) never re-uploads bytes that already landed in storage —
    * only the send/ack step is retried.
    */
@@ -86,6 +106,11 @@ type OutgoingInput = TextInput | MediaInput;
 
 // Retained so retry can re-run without the component. Cleared on confirmed send.
 const outbox = new Map<string, OutgoingInput>();
+
+// A clientMessageId currently running through a send cycle — guards against
+// concurrent/duplicate emits for the same message (e.g. two `online` events,
+// or a manual retry click while an automatic cycle is still in flight).
+const inFlight = new Set<string>();
 
 function toReplyDto(reply: MessageDto | null): ReplyMessageDto | null {
   if (!reply) return null;
@@ -135,6 +160,63 @@ function baseOptimistic(input: OutgoingInput): ChatMessage {
   };
 }
 
+function buildPayload(input: OutgoingInput, upload?: UploadResponseDto): SocketChatSendPayload {
+  if (input.kind === 'text') {
+    return {
+      conversationId: input.conversationId,
+      type: MessageType.TEXT,
+      body: input.body,
+      clientMessageId: input.clientMessageId,
+      tempId: input.clientMessageId,
+      replyToMessageId: input.replyTo?.id,
+    };
+  }
+  return {
+    conversationId: input.conversationId,
+    type: input.type,
+    fileKey: upload!.fileKey,
+    fileName: upload!.fileName,
+    mimeType: upload!.mimeType,
+    fileSize: upload!.fileSize,
+    duration: input.type === MessageType.VOICE ? input.duration ?? undefined : undefined,
+    clientMessageId: input.clientMessageId,
+    tempId: input.clientMessageId,
+    replyToMessageId: input.replyTo?.id,
+  };
+}
+
+// ─── Session safety ──────────────────────────────────────────────────────────
+
+function currentUserId(): string | null {
+  try {
+    return useAuthStore.getState().user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** True while the same user/session that started this recovery is still the
+ *  active one. A rebuild or retry started under one user must never complete
+ *  and send after logout or a session/user change. */
+function sessionStillValid(initiatingUserId: string | null): boolean {
+  try {
+    const s = useAuthStore.getState();
+    return s.isAuthenticated === true && (s.user?.id ?? null) === initiatingUserId;
+  } catch {
+    return false;
+  }
+}
+
+function isOffline(): boolean {
+  try {
+    return typeof navigator !== 'undefined' && navigator.onLine === false;
+  } catch {
+    return false;
+  }
+}
+
+// ─── Low-level connect / emit primitives ───────────────────────────────────
+
 /**
  * Resolve once the socket is actually connected, or once `timeoutMs` elapses.
  *
@@ -166,343 +248,441 @@ function waitForConnection(socket: Socket, timeoutMs: number): Promise<boolean> 
   });
 }
 
+type EmitResult =
+  | { ok: true; message: MessageDto }
+  | { ok: false; timedOut: true }
+  | { ok: false; timedOut: false; code?: string; error?: string };
+
 /**
- * Emit CHAT_SEND and await a durable, typed ack with a bounded timeout.
+ * Emit CHAT_SEND once and await a durable, typed ack with a bounded timeout.
+ * The timer starts only once this is called — never before an upload (media)
+ * or a connect/rebuild wait completes.
  *
- * Buffered-emit-on-reconnect is NOT relied on as the recovery path: if the
- * socket isn't connected right now, we explicitly drive a connect attempt and
- * wait a bounded amount of time for it. If that doesn't land, we fail this
- * attempt immediately with a real socket-state reason instead of silently
- * queuing the emit and burning the full ack timeout.
+ * A late ack that arrives after this attempt's own timeout already resolved
+ * the promise is not lost: if it's a success, `onLateSuccess` is invoked so
+ * the UI can still self-correct to `sent` (the backend's clientMessageId
+ * idempotency guarantees it's the exact same row a newer attempt may also be
+ * racing to confirm). A late failure/no-ack is simply ignored — a newer
+ * attempt, or the terminal `failed` state, already owns this message's fate.
  */
-async function emitSend(
+function emitOnce(
+  socket: Socket,
   payload: SocketChatSendPayload,
-  diag: { origin: SendOrigin; attempt?: number },
-): Promise<SocketChatSendAck> {
-  const socket = getSocket();
-  ensureReconnectHook(socket);
-  const cid = payload.clientMessageId;
-  const base = {
-    clientMessageId: cid,
-    conversationId: payload.conversationId,
-    sendOrigin: diag.origin,
-    attempt: diag.attempt,
-  };
-
-  if (!socket.connected) {
-    chatSendPhase({ ...base, phase: 'connect-wait-start' });
-    const connected = await waitForConnection(socket, CONNECT_WAIT_MS);
-    if (!connected) {
-      chatSendPhase({ ...base, phase: 'connect-wait-timeout', reason: 'socket-not-connected' });
-      return {
-        ok: false,
-        clientMessageId: cid,
-        code: 'INTERNAL',
-        error: 'socket-not-connected',
-      };
-    }
-    chatSendPhase({ ...base, phase: 'connect-wait-success' });
-  }
-
-  chatSendPhase({ ...base, phase: 'send-emitted', deliveryState: 'sending' });
-
+  timeoutMs: number,
+  onLateSuccess: (message: MessageDto) => void,
+): Promise<EmitResult> {
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (ack: SocketChatSendAck) => {
+    const finish = (r: EmitResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve(ack);
+      resolve(r);
     };
-    const timer = setTimeout(() => {
-      chatSendPhase({ ...base, phase: 'ack-timeout' });
-      finish({
-        ok: false,
-        clientMessageId: cid,
-        code: 'INTERNAL',
-        error: 'timeout',
-      });
-    }, ACK_TIMEOUT_MS);
+    const timer = setTimeout(() => finish({ ok: false, timedOut: true }), timeoutMs);
+
     socket.emit(SOCKET_EVENTS.CHAT_SEND, payload, (ack: SocketChatSendAck) => {
       const resolved: SocketChatSendAck =
-        ack ?? { ok: false, clientMessageId: cid, code: 'INTERNAL', error: 'no-ack' };
-      if (resolved.ok) {
-        chatSendPhase({ ...base, phase: 'ack-success', deliveryState: 'sent' });
-      } else {
-        chatSendPhase({ ...base, phase: 'server-rejection', reason: resolved.code });
+        ack ?? { ok: false, clientMessageId: payload.clientMessageId, code: 'INTERNAL', error: 'no-ack' };
+
+      if (settled) {
+        if (resolved.ok && resolved.message) onLateSuccess(resolved.message);
+        return;
       }
-      finish(resolved);
+      if (resolved.ok && resolved.message) {
+        finish({ ok: true, message: resolved.message });
+      } else {
+        finish({ ok: false, timedOut: false, code: resolved.code, error: resolved.error });
+      }
     });
   });
 }
 
-function buildPayload(input: OutgoingInput, upload?: UploadResponseDto): SocketChatSendPayload {
-  if (input.kind === 'text') {
-    return {
-      conversationId: input.conversationId,
-      type: MessageType.TEXT,
-      body: input.body,
-      clientMessageId: input.clientMessageId,
-      tempId: input.clientMessageId,
-      replyToMessageId: input.replyTo?.id,
-    };
-  }
-  return {
-    conversationId: input.conversationId,
-    type: input.type,
-    fileKey: upload!.fileKey,
-    fileName: upload!.fileName,
-    mimeType: upload!.mimeType,
-    fileSize: upload!.fileSize,
-    duration: input.type === MessageType.VOICE ? input.duration ?? undefined : undefined,
-    clientMessageId: input.clientMessageId,
-    tempId: input.clientMessageId,
-    replyToMessageId: input.replyTo?.id,
-  };
+// ─── Failure classification ─────────────────────────────────────────────────
+
+export type FailureReason =
+  | 'offline'
+  | 'socket-not-connected'
+  | 'ack-timeout'
+  | 'socket-rebuild-failed'
+  | 'fresh-socket-connect-timeout'
+  | 'fresh-socket-ack-timeout'
+  | 'server-rejection'
+  | 'upload-failed'
+  | 'authentication-unavailable'
+  | 'session-changed';
+
+/** A manual Retry must not blindly reuse a socket generation that already
+ *  failed for one of these reasons — it forces one rebuild first instead. */
+const REBUILD_REQUIRING_REASONS: ReadonlySet<FailureReason> = new Set([
+  'ack-timeout',
+  'fresh-socket-ack-timeout',
+  'socket-rebuild-failed',
+  'fresh-socket-connect-timeout',
+]);
+
+interface FailureRecord {
+  reason: FailureReason;
+  generation: number;
 }
 
-/**
- * True for an ack that failed because the transport itself never delivered
- * it — never connected in time, or no ack arrived within the ack budget
- * (the two failure modes `emitSend` can produce for connection loss:
- * reconnect timeout / transport close / ping timeout all surface as one of
- * these, since `emitSend` always drives an explicit connect+ack cycle rather
- * than trusting socket.io's own buffered-emit-on-reconnect).
- *
- * False for anything the server actually looked at and rejected (VALIDATION,
- * FORBIDDEN, NOT_FOUND, ATTACHMENT, or an explicit INTERNAL error body) — those
- * are real failures and must never be treated as a connectivity blip.
- */
-function isConnectivityFailure(ack: SocketChatSendAck): boolean {
-  return !ack.ok && ack.code === 'INTERNAL' && (ack.error === 'socket-not-connected' || ack.error === 'timeout');
-}
+const lastFailure = new Map<string, FailureRecord>();
 
 type SendOutcome =
   | { kind: 'ok'; message: MessageDto }
-  | { kind: 'connectivity' }
-  | { kind: 'failed' };
+  | { kind: 'offline' }
+  | { kind: 'failed'; reason: FailureReason };
+
+type DiagBase = (extra?: Record<string, unknown>) => Parameters<typeof chatSendPhase>[0];
+
+function makeBase(cid: string, conversationId: string, origin: SendOrigin): DiagBase {
+  return (extra = {}) =>
+    ({ clientMessageId: cid, conversationId, sendOrigin: origin, ...extra }) as Parameters<
+      typeof chatSendPhase
+    >[0];
+}
 
 /**
- * Run upload (media) + emit + ack. Does NOT touch delivery state beyond the
- * transient `uploading`/`sending` steps — the caller decides what a given
- * outcome means for the message (first send vs. reconnect retry vs. manual
- * retry all react differently to a connectivity outcome).
+ * Diagnostics must never affect the send/recovery path. `chatSendPhase`
+ * itself is documented to never throw (every entry point in
+ * socket-diagnostics.ts is wrapped in try/catch), but this call boundary
+ * does not rely on that guarantee alone — every diagnostics call in this
+ * file goes through this wrapper so a future diagnostics regression can
+ * never interrupt message delivery (Gate 3 §20 / Gate 10).
  */
-async function performSend(
-  input: OutgoingInput,
-  diag: { origin: SendOrigin; attempt?: number },
-): Promise<SendOutcome> {
-  const store = useChatStore.getState();
-  const cid = input.clientMessageId;
-  const base = {
-    clientMessageId: cid,
-    conversationId: input.conversationId,
-    sendOrigin: diag.origin,
-    attempt: diag.attempt,
-  };
+function safeDiag(event: Parameters<typeof chatSendPhase>[0]): void {
+  try {
+    chatSendPhase(event);
+  } catch {
+    /* diagnostics must never affect send/recovery */
+  }
+}
+
+/** Idempotently land a late/duplicate ack. Never creates a duplicate (dedup
+ *  by identity in the store) and never regresses a state a newer attempt
+ *  already owns for a different reason — it only ever moves toward `sent`. */
+function lateSuccessReconcile(conversationId: string, cid: string, message: MessageDto): void {
+  useChatStore.getState().reconcile(conversationId, { ...(message as ChatMessage), deliveryState: 'sent' });
+  outbox.delete(cid);
+  lastFailure.delete(cid);
+}
+
+interface RebuildBudget {
+  rebuilds: number;
+  emits: number;
+}
+
+type RebuildOutcome =
+  | { ok: true; socket: Socket; generation: number }
+  | { ok: false; reason: FailureReason };
+
+/**
+ * Get a healthy, connected socket at a generation newer than `failedGeneration`.
+ * If a concurrent send cycle already rebuilt in the meantime, reuses that
+ * fresh connection for free (no extra rebuild spent). Otherwise performs the
+ * one hard rebuild this cycle's budget allows.
+ */
+async function ensureFreshSocket(
+  base: DiagBase,
+  budget: RebuildBudget,
+  reason: string,
+  failedSocketId: string | undefined,
+  failedGeneration: number,
+): Promise<RebuildOutcome> {
+  const liveSocket = getSocket();
+  const liveGeneration = getSocketGeneration();
+  if (liveGeneration > failedGeneration && liveSocket.connected) {
+    safeDiag(
+      base({
+        phase: 'retry-after-socket-rebuild',
+        oldSocketId: failedSocketId,
+        oldSocketGeneration: failedGeneration,
+        newSocketId: liveSocket.id,
+        newSocketGeneration: liveGeneration,
+        rebuildReason: 'concurrent-rebuild-reused',
+      }),
+    );
+    return { ok: true, socket: liveSocket, generation: liveGeneration };
+  }
+
+  if (budget.rebuilds >= MAX_HARD_SOCKET_REBUILDS_PER_SEND_CYCLE) {
+    return { ok: false, reason: 'socket-rebuild-failed' };
+  }
+  budget.rebuilds += 1;
 
   try {
-    let upload: UploadResponseDto | undefined;
+    const socket = await hardRebuildSocket(reason, timing.FRESH_SOCKET_CONNECT_TIMEOUT_MS);
+    const generation = getSocketGeneration();
+    safeDiag(
+      base({
+        phase: 'retry-after-socket-rebuild',
+        oldSocketId: failedSocketId,
+        oldSocketGeneration: failedGeneration,
+        newSocketId: socket.id,
+        newSocketGeneration: generation,
+        rebuildReason: reason,
+      }),
+    );
+    return { ok: true, socket, generation };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'socket-rebuild-failed';
+    const failureReason: FailureReason =
+      msg === 'session-changed'
+        ? 'session-changed'
+        : msg === 'fresh-socket-connect-timeout'
+          ? 'fresh-socket-connect-timeout'
+          : 'socket-rebuild-failed';
+    safeDiag(base({ phase: 'recovery-aborted', reason: failureReason, failureReason }));
+    return { ok: false, reason: failureReason };
+  }
+}
 
-    if (input.kind === 'media') {
-      if (input.uploadedFile) {
-        // Already uploaded on a prior attempt (e.g. the ack step failed after
-        // a successful upload) — reuse it. Only the send/ack is retried, never
-        // the bytes: avoids re-uploading on every automatic reconnect cycle
-        // and the orphaned-storage-object risk that would come with it.
-        upload = input.uploadedFile;
-      } else {
-        store.setDeliveryState(input.conversationId, cid, 'uploading');
-        chatSendPhase({ ...base, phase: 'upload-start', deliveryState: 'uploading' });
-        try {
-          const form = new FormData();
-          form.append('file', input.file);
-          const res = await api.post<{ data: UploadResponseDto }>(
-            `/uploads/message-attachment?conversationId=${input.conversationId}`,
-            form,
-            { headers: { 'Content-Type': 'multipart/form-data' } },
-          );
-          upload = res.data.data;
-          input.uploadedFile = upload; // cache on the shared outbox entry for any future retry
-          chatSendPhase({ ...base, phase: 'upload-success' });
-        } catch (err) {
-          // Status code only — never the URL, file name, or response body.
-          const status = (err as { response?: { status?: number } })?.response?.status;
-          chatSendPhase({
-            ...base,
-            phase: 'upload-error',
-            reason: status ? `http-${status}` : 'upload-network-error',
-          });
-          throw err;
-        }
+interface AttemptOptions {
+  /** Manual retry after a failure whose recorded socket generation is not
+   *  older than the current one — force one rebuild before the first emit
+   *  instead of spending 8s emitting on a socket already known to be bad. */
+  forceRebuildFirst?: boolean;
+}
+
+/**
+ * Run upload (media, cached) + connect/rebuild as needed + the bounded
+ * CHAT_SEND emit cycle (≤2 emits, ≤1 hard rebuild). Does not itself touch
+ * terminal store state beyond the transient uploading/sending/rebuilding/
+ * retrying delivery states — the caller (`run`) decides what an outcome
+ * means (first send vs. offline-resume vs. manual retry all react the same
+ * way to the same outcome shape).
+ */
+async function attemptDeliver(
+  input: OutgoingInput,
+  origin: SendOrigin,
+  initiatingUserId: string | null,
+  opts: AttemptOptions = {},
+): Promise<SendOutcome> {
+  const cid = input.clientMessageId;
+  const convId = input.conversationId;
+  const store = useChatStore.getState();
+  const base = makeBase(cid, convId, origin);
+
+  if (isOffline()) return { kind: 'offline' };
+  if (!sessionStillValid(initiatingUserId)) return { kind: 'failed', reason: 'session-changed' };
+
+  // ── Upload (media only) — never repeated once cached ──
+  let upload: UploadResponseDto | undefined;
+  if (input.kind === 'media') {
+    if (input.uploadedFile) {
+      upload = input.uploadedFile;
+    } else {
+      store.setDeliveryState(convId, cid, 'uploading');
+      safeDiag(base({ phase: 'upload-start', deliveryState: 'uploading' }));
+      try {
+        const form = new FormData();
+        form.append('file', input.file);
+        const res = await api.post<{ data: UploadResponseDto }>(
+          `/uploads/message-attachment?conversationId=${convId}`,
+          form,
+          { headers: { 'Content-Type': 'multipart/form-data' } },
+        );
+        upload = res.data.data;
+        input.uploadedFile = upload; // cache on the shared outbox entry for any future retry
+        safeDiag(base({ phase: 'upload-success' }));
+      } catch (err) {
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        safeDiag(base({ phase: 'upload-error', reason: status ? `http-${status}` : 'upload-network-error' }));
+        return { kind: 'failed', reason: 'upload-failed' };
       }
     }
+  }
 
-    store.setDeliveryState(input.conversationId, cid, 'sending');
-    const ack = await emitSend(buildPayload(input, upload), diag);
+  // Connectivity/session could have changed while the upload was in flight —
+  // the ack timer must never start on a request we already know can't land.
+  if (isOffline()) return { kind: 'offline' };
+  if (!sessionStillValid(initiatingUserId)) return { kind: 'failed', reason: 'session-changed' };
 
-    if (ack.ok && ack.message) return { kind: 'ok', message: ack.message };
-    if (isConnectivityFailure(ack)) return { kind: 'connectivity' };
-    return { kind: 'failed' };
-  } catch {
-    // Upload threw (network error, validation, etc.) — a real failure, never
-    // an `awaiting-reconnect` candidate, per spec: upload failure fails now.
-    return { kind: 'failed' };
+  const budget: RebuildBudget = { rebuilds: 0, emits: 0 };
+  let socket = getSocket();
+  let generation = getSocketGeneration();
+
+  // ── Phase A: obtain a connected socket ──
+  if (opts.forceRebuildFirst) {
+    safeDiag(base({ phase: 'manual-retry-requires-fresh-socket', reason: 'stale-socket-generation' }));
+    store.setDeliveryState(convId, cid, 'rebuilding-connection');
+    const rebuilt = await ensureFreshSocket(base, budget, 'manual-retry-stale-generation', socket.id, generation);
+    if (!rebuilt.ok) return { kind: 'failed', reason: rebuilt.reason };
+    socket = rebuilt.socket;
+    generation = rebuilt.generation;
+  } else if (!socket.connected) {
+    safeDiag(base({ phase: 'connect-wait-start', deliveryState: 'sending' }));
+    const reconnected = await waitForConnection(socket, timing.NORMAL_RECONNECT_GRACE_MS);
+    if (reconnected) {
+      safeDiag(base({ phase: 'connect-wait-success' }));
+      socket = getSocket();
+      generation = getSocketGeneration();
+    } else {
+      if (isOffline()) return { kind: 'offline' };
+      if (!sessionStillValid(initiatingUserId)) return { kind: 'failed', reason: 'session-changed' };
+      safeDiag(base({ phase: 'connect-wait-timeout', reason: 'socket-not-connected' }));
+      store.setDeliveryState(convId, cid, 'rebuilding-connection');
+      const rebuilt = await ensureFreshSocket(base, budget, 'not-connected-grace-expired', socket.id, generation);
+      if (!rebuilt.ok) return { kind: 'failed', reason: rebuilt.reason };
+      socket = rebuilt.socket;
+      generation = rebuilt.generation;
+    }
+  }
+
+  if (!sessionStillValid(initiatingUserId)) return { kind: 'failed', reason: 'session-changed' };
+
+  // ── Phase B: bounded emit cycle ──
+  const payload = buildPayload(input, upload);
+
+  for (;;) {
+    if (budget.emits >= MAX_CHAT_SEND_EMITS_PER_SEND_CYCLE) {
+      return { kind: 'failed', reason: 'ack-timeout' };
+    }
+    if (!sessionStillValid(initiatingUserId)) return { kind: 'failed', reason: 'session-changed' };
+
+    budget.emits += 1;
+    const attemptNumber = budget.emits;
+    const isFirstAttempt = attemptNumber === 1;
+    const attemptDeliveryState = isFirstAttempt ? 'sending' : 'retrying';
+    store.setDeliveryState(convId, cid, attemptDeliveryState);
+    safeDiag(base({ phase: 'send-emitted', deliveryState: attemptDeliveryState, attempt: attemptNumber }));
+
+    const result = await emitOnce(socket, payload, timing.CHAT_SEND_ACK_TIMEOUT_MS, (msg) =>
+      lateSuccessReconcile(convId, cid, msg),
+    );
+
+    if (result.ok) {
+      safeDiag(
+        base({
+          phase: isFirstAttempt ? 'ack-success' : 'fresh-socket-ack-success',
+          deliveryState: 'sent',
+          attempt: attemptNumber,
+        }),
+      );
+      return { kind: 'ok', message: result.message };
+    }
+
+    if (!result.timedOut) {
+      safeDiag(base({ phase: 'server-rejection', reason: result.code, attempt: attemptNumber }));
+      return { kind: 'failed', reason: 'server-rejection' };
+    }
+
+    const timeoutPhase = isFirstAttempt ? 'ack-timeout' : 'fresh-socket-ack-timeout';
+    safeDiag(base({ phase: timeoutPhase, attempt: attemptNumber }));
+
+    if (budget.emits >= MAX_CHAT_SEND_EMITS_PER_SEND_CYCLE) {
+      return { kind: 'failed', reason: isFirstAttempt ? 'ack-timeout' : 'fresh-socket-ack-timeout' };
+    }
+    if (isOffline()) return { kind: 'offline' };
+    if (!sessionStillValid(initiatingUserId)) return { kind: 'failed', reason: 'session-changed' };
+
+    // Connected-socket ack timeout: the confirmed zombie condition. Never
+    // trust `socket.connected` again for this attempt — mark it unhealthy
+    // and get a fresh one (reusing a concurrent rebuild if one already
+    // landed) before the one remaining emit.
+    markSocketUnhealthy(socket.id, generation, 'ack-timeout');
+    store.setDeliveryState(convId, cid, 'rebuilding-connection');
+    const rebuilt = await ensureFreshSocket(base, budget, 'ack-timeout', socket.id, generation);
+    if (!rebuilt.ok) return { kind: 'failed', reason: rebuilt.reason };
+    socket = rebuilt.socket;
+    generation = rebuilt.generation;
+    // loop continues → the next emit uses the fresh socket
   }
 }
 
-// ─── Reconnect tracking (awaiting-reconnect ⇄ failed) ──────────────────────────
+// ─── Offline (browser) resume ───────────────────────────────────────────────
 
-interface ReconnectEntry {
-  /** Unsuccessful automatic reconnect-triggered retries so far. */
-  cycles: number;
-  /** True while an automatic retry for this message is in flight, to make
-   *  sure a single message is never retried twice concurrently (e.g. two
-   *  `connect` events firing close together). */
-  retrying: boolean;
-  /** Wall-clock cap: forces `failed` even if `connect` never fires again. */
-  deadline: ReturnType<typeof setTimeout>;
+// cid → the origin to resume with once the browser comes back online.
+const offlineWaiting = new Map<string, SendOrigin>();
+let onlineHookAttached = false;
+
+function ensureOnlineHook(): void {
+  if (onlineHookAttached || typeof window === 'undefined') return;
+  onlineHookAttached = true;
+  window.addEventListener('online', () => {
+    for (const [cid, origin] of Array.from(offlineWaiting.entries())) {
+      offlineWaiting.delete(cid);
+      const input = outbox.get(cid);
+      if (!input) continue;
+      safeDiag({
+        clientMessageId: cid,
+        conversationId: input.conversationId,
+        sendOrigin: origin,
+        phase: 'offline-resume',
+        deliveryState: 'sending',
+      });
+      void run(input, origin);
+    }
+  });
 }
 
-const awaitingReconnect = new Map<string, ReconnectEntry>();
-
-/** First entry into `awaiting-reconnect` for this message: start its budget. */
-function enterAwaitingReconnect(conversationId: string, cid: string, origin: SendOrigin): void {
-  if (!awaitingReconnect.has(cid)) {
-    const deadline = setTimeout(() => forceFail(conversationId, cid), RECONNECT_MAX_WAIT_MS);
-    awaitingReconnect.set(cid, { cycles: 0, retrying: false, deadline });
-  }
-  chatSendPhase({
+function enterAwaitingConnection(conversationId: string, cid: string, origin: SendOrigin): void {
+  ensureOnlineHook();
+  offlineWaiting.set(cid, origin);
+  safeDiag({
     clientMessageId: cid,
     conversationId,
     sendOrigin: origin,
-    phase: 'enter-awaiting-reconnect',
-    deliveryState: 'awaiting-reconnect',
-    attempt: awaitingReconnect.get(cid)?.cycles,
+    phase: 'offline-wait-start',
+    deliveryState: 'awaiting-connection',
   });
-  useChatStore.getState().setDeliveryState(conversationId, cid, 'awaiting-reconnect');
+  useChatStore.getState().setDeliveryState(conversationId, cid, 'awaiting-connection');
 }
 
-function clearReconnectTracking(cid: string): void {
-  const entry = awaitingReconnect.get(cid);
-  if (!entry) return;
-  clearTimeout(entry.deadline);
-  awaitingReconnect.delete(cid);
-}
+// ─── Orchestration ──────────────────────────────────────────────────────────
 
-function forceFail(conversationId: string, cid: string): void {
-  const entry = awaitingReconnect.get(cid);
-  if (!entry) return; // already resolved by a retry
-  clearReconnectTracking(cid);
-  chatSendPhase({
-    clientMessageId: cid,
-    conversationId,
-    sendOrigin: 'auto-reconnect-retry',
-    phase: 'force-failed',
-    deliveryState: 'failed',
-    attempt: entry.cycles,
-    reason: 'reconnect-60s-cap-elapsed',
-  });
-  useChatStore.getState().setDeliveryState(conversationId, cid, 'failed');
-}
-
-/** Attempt one automatic retry for a single `awaiting-reconnect` message. */
-async function attemptReconnectRetry(cid: string): Promise<void> {
-  const entry = awaitingReconnect.get(cid);
-  const input = outbox.get(cid);
-  if (!entry || !input) {
-    clearReconnectTracking(cid);
-    return;
-  }
-  if (entry.retrying) return; // already retrying this cycle — never double-send
-  entry.retrying = true;
-
+/** Run one bounded send cycle (upload if needed + connect/rebuild as needed +
+ *  the ≤2-emit ack cycle), transitioning the optimistic message accordingly.
+ *  Guards against concurrent/duplicate emits for the same clientMessageId. */
+async function run(input: OutgoingInput, origin: SendOrigin, opts: AttemptOptions = {}): Promise<void> {
+  const cid = input.clientMessageId;
+  if (inFlight.has(cid)) return; // already running a cycle for this message
+  inFlight.add(cid);
+  const initiatingUserId = currentUserId();
   const store = useChatStore.getState();
-  const attempt = entry.cycles + 1;
-  chatSendPhase({
-    clientMessageId: cid,
-    conversationId: input.conversationId,
-    sendOrigin: 'auto-reconnect-retry',
-    phase: 'auto-retry-start',
-    deliveryState: 'awaiting-reconnect',
-    attempt,
-  });
-  // performSend sets the transient uploading/sending state itself.
-  const outcome = await performSend(input, { origin: 'auto-reconnect-retry', attempt });
-  entry.retrying = false;
 
-  if (outcome.kind === 'ok') {
-    clearReconnectTracking(cid);
-    store.reconcile(input.conversationId, { ...(outcome.message as ChatMessage), deliveryState: 'sent' });
-    outbox.delete(cid);
-    return;
-  }
-  if (outcome.kind === 'failed') {
-    clearReconnectTracking(cid);
-    store.setDeliveryState(input.conversationId, cid, 'failed');
-    return;
-  }
+  try {
+    const outcome = await attemptDeliver(input, origin, initiatingUserId, opts);
 
-  // Still a connectivity failure — count this cycle; the deadline timer set
-  // in enterAwaitingReconnect keeps running independently (60s wall clock).
-  const current = awaitingReconnect.get(cid);
-  if (!current) return; // deadline fired concurrently and already forced failed
-  current.cycles += 1;
-  if (current.cycles >= RECONNECT_MAX_CYCLES) {
-    clearReconnectTracking(cid);
-    chatSendPhase({
+    if (outcome.kind === 'ok') {
+      lastFailure.delete(cid);
+      store.reconcile(input.conversationId, { ...(outcome.message as ChatMessage), deliveryState: 'sent' });
+      outbox.delete(cid);
+      return;
+    }
+
+    if (outcome.kind === 'offline') {
+      enterAwaitingConnection(input.conversationId, cid, origin);
+      return;
+    }
+
+    // A late ack from an EARLIER, abandoned attempt in this same cycle (see
+    // `emitOnce`'s `onLateSuccess`) may have already reconciled this message
+    // to `sent` — via a real server-confirmed row — while this cycle's own
+    // (later) attempt was independently timing out toward this failure
+    // branch. That success is the true, durable outcome (the server has the
+    // message); the cycle's own terminal-failure tail must never regress a
+    // delivered message back to `failed`.
+    const nowList = useChatStore.getState().messages[input.conversationId] ?? [];
+    const nowMsg = nowList.find((m) => m.clientMessageId === cid || m.id === cid);
+    if (nowMsg?.deliveryState === 'sent') return;
+
+    // Terminal failure for this cycle — remember the reason + the socket
+    // generation it happened on so a manual Retry knows whether it must
+    // force a fresh socket before trying again (§9).
+    lastFailure.set(cid, { reason: outcome.reason, generation: getSocketGeneration() });
+    safeDiag({
       clientMessageId: cid,
       conversationId: input.conversationId,
-      sendOrigin: 'auto-reconnect-retry',
+      sendOrigin: origin,
       phase: 'force-failed',
       deliveryState: 'failed',
-      attempt: current.cycles,
-      reason: 'reconnect-cycles-exhausted',
+      reason: outcome.reason,
+      failureReason: outcome.reason,
     });
     store.setDeliveryState(input.conversationId, cid, 'failed');
-  } else {
-    store.setDeliveryState(input.conversationId, cid, 'awaiting-reconnect');
-  }
-}
-
-/** On a confirmed `connect`, retry every `awaiting-reconnect` message once. */
-function retryAllAwaitingReconnect(): void {
-  for (const cid of Array.from(awaitingReconnect.keys())) {
-    void attemptReconnectRetry(cid);
-  }
-}
-
-// Attach the reconnect-retry listener exactly once per socket instance (a
-// WeakSet, not a module boolean, so a fresh socket created after logout/
-// reconnectSocket() still gets the hook — see socket-client.ts).
-const reconnectHookSockets = new WeakSet<Socket>();
-function ensureReconnectHook(socket: Socket): void {
-  if (reconnectHookSockets.has(socket)) return;
-  reconnectHookSockets.add(socket);
-  socket.on('connect', retryAllAwaitingReconnect);
-}
-
-/** Run upload (media) + emit + ack, transitioning the optimistic message. */
-async function run(input: OutgoingInput, origin: SendOrigin): Promise<void> {
-  const store = useChatStore.getState();
-  const cid = input.clientMessageId;
-  const outcome = await performSend(input, { origin });
-
-  if (outcome.kind === 'ok') {
-    // Reconcile the optimistic item with the durable server row (dedup by id).
-    clearReconnectTracking(cid);
-    store.reconcile(input.conversationId, { ...(outcome.message as ChatMessage), deliveryState: 'sent' });
-    outbox.delete(cid);
-  } else if (outcome.kind === 'connectivity') {
-    // Transport-level failure, not a real rejection: keep the optimistic
-    // message visible as "awaiting reconnect" and let the connect listener
-    // retry it automatically — do NOT mark it failed yet.
-    enterAwaitingReconnect(input.conversationId, cid, origin);
-  } else {
-    // Real failure (validation/forbidden/upload/malformed/explicit backend
-    // error). Keep visible + retryable. Do NOT auto-retry in the background.
-    clearReconnectTracking(cid);
-    store.setDeliveryState(input.conversationId, cid, 'failed');
+  } finally {
+    inFlight.delete(cid);
   }
 }
 
@@ -525,7 +705,7 @@ export function sendText(args: {
   };
   outbox.set(input.clientMessageId, input);
   useChatStore.getState().insertOptimistic(args.conversationId, baseOptimistic(input));
-  chatSendPhase({
+  safeDiag({
     clientMessageId: input.clientMessageId,
     conversationId: args.conversationId,
     sendOrigin: 'new-message',
@@ -561,7 +741,7 @@ export function sendMedia(args: {
   };
   outbox.set(input.clientMessageId, input);
   useChatStore.getState().insertOptimistic(args.conversationId, baseOptimistic(input));
-  chatSendPhase({
+  safeDiag({
     clientMessageId: input.clientMessageId,
     conversationId: args.conversationId,
     sendOrigin: 'new-message',
@@ -583,15 +763,29 @@ export function voiceFileFromBlob(blob: Blob, mimeType: string): { file: File; m
   return { file, mime };
 }
 
-/** Manually retry a failed message. Reuses the same clientMessageId (idempotent). */
+/**
+ * Manually retry a failed message. Reuses the same clientMessageId
+ * (idempotent). If the last failure happened on a socket generation that is
+ * still the current one (i.e. nothing has rebuilt since), forces one
+ * controlled hard rebuild before the first emit instead of spending another
+ * 8s on a socket already known to be bad (§9).
+ */
 export function retryMessage(conversationId: string, clientMessageId: string): void {
   const input = outbox.get(clientMessageId);
   if (!input) return;
+  if (inFlight.has(clientMessageId)) return;
   const state = useChatStore.getState();
   const list = state.messages[conversationId] ?? [];
   const current = list.find((m) => m.clientMessageId === clientMessageId || m.id === clientMessageId);
   if (current && current.deliveryState !== 'failed') return; // only retry failed
-  chatSendPhase({
+
+  const failure = lastFailure.get(clientMessageId);
+  const forceRebuildFirst =
+    !!failure &&
+    REBUILD_REQUIRING_REASONS.has(failure.reason) &&
+    failure.generation >= getSocketGeneration();
+
+  safeDiag({
     clientMessageId,
     conversationId,
     sendOrigin: 'manual-retry',
@@ -599,7 +793,7 @@ export function retryMessage(conversationId: string, clientMessageId: string): v
     deliveryState: current?.deliveryState,
   });
   state.setDeliveryState(conversationId, clientMessageId, input.kind === 'media' ? 'uploading' : 'sending');
-  void run(input, 'manual-retry');
+  void run(input, 'manual-retry', { forceRebuildFirst });
 }
 
 /** True if a failed message can still be retried (its input is retained). */
@@ -608,13 +802,36 @@ export function canRetry(clientMessageId: string): boolean {
 }
 
 /**
- * Test-only: reset all module-scoped outbox/reconnect state between test
- * cases. The outbox and reconnect-cycle tracking intentionally live at
- * module scope in production (they must survive component remounts), which
- * means they also persist across tests in the same file unless cleared.
- * Never call this outside tests.
+ * Test-only: reset all module-scoped outbox state between test cases. The
+ * outbox and recovery tracking intentionally live at module scope in
+ * production (they must survive component remounts), which means they also
+ * persist across tests in the same file unless cleared. Never call this
+ * outside tests.
  */
 export function __resetOutboxForTests(): void {
   outbox.clear();
-  for (const cid of Array.from(awaitingReconnect.keys())) clearReconnectTracking(cid);
+  inFlight.clear();
+  offlineWaiting.clear();
+  lastFailure.clear();
+  onlineHookAttached = false;
+}
+
+/**
+ * Test-only: scale down the recovery timing budget for real-network
+ * integration/soak tests (real Socket.IO server + client — no fake timers).
+ * The exact production values (8000/3000/5000ms) are verified separately by
+ * the fake-timer unit tests in outbox.test.ts, which never call this. Never
+ * call outside tests.
+ */
+export function __setOutboxTimingForTests(overrides: Partial<typeof timing>): void {
+  timing = { ...timing, ...overrides };
+}
+
+/** Test-only: restore the production timing values. Never call outside tests. */
+export function __resetOutboxTimingForTests(): void {
+  timing = {
+    CHAT_SEND_ACK_TIMEOUT_MS: 8_000,
+    NORMAL_RECONNECT_GRACE_MS: 3_000,
+    FRESH_SOCKET_CONNECT_TIMEOUT_MS: 5_000,
+  };
 }

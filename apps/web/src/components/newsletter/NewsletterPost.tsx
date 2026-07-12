@@ -5,7 +5,7 @@ import { cn, formatDate, formatFileSize } from '@/lib/utils';
 import type { NewsletterPostDto, NewsletterBlock } from '@karamooziyar/shared';
 import { REACTION_EMOJI_MAP, ReactionEmoji } from '@karamooziyar/shared';
 import { Download, FileText, Pin, ChevronLeft, Image as ImageIcon, Film, Mic, MoreVertical, Pencil, Trash2 } from 'lucide-react';
-import { getSocket } from '@/lib/socket-client';
+import { useLiveSocket } from '@/hooks/useSocket';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import { useNewsletterStore } from '@/store/newsletter.store';
 import { toast } from 'sonner';
@@ -134,7 +134,8 @@ function LegacyAttachments({ post }: { post: NewsletterPostDto }) {
 const REACTIONS = Object.entries(REACTION_EMOJI_MAP) as [ReactionEmoji, string][];
 
 export function ReactionsBar({ post, isAdmin }: { post: NewsletterPostDto; isAdmin?: boolean }) {
-  const socket = getSocket();
+  // Reactive to socket replacement (hard rebuild) — see useLiveSocket.
+  const socket = useLiveSocket();
   const { updatePost } = useNewsletterStore();
   const [showReactions, setShowReactions] = useState(false);
 

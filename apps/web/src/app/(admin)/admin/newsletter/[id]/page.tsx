@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import api from '@/lib/api-client';
-import { getSocket } from '@/lib/socket-client';
+import { useLiveSocket } from '@/hooks/useSocket';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import type { NewsletterPostDto } from '@karamooziyar/shared';
 import { NewsletterPostCard } from '@/components/newsletter/NewsletterPost';
@@ -67,6 +67,8 @@ export default function AdminNewsletterDetailPage() {
   const [loading, setLoading] = useState(true);
   const [showSeen, setShowSeen] = useState(false);
   const [editing, setEditing] = useState(false);
+  // Reactive to socket replacement (hard rebuild) — see useLiveSocket.
+  const liveSocket = useLiveSocket();
 
   useEffect(() => {
     api.get<{ data: NewsletterPostDto }>(`/newsletter/${id}`)
@@ -77,14 +79,14 @@ export default function AdminNewsletterDetailPage() {
 
   useEffect(() => {
     if (!post) return;
-    const socket = getSocket();
+    const socket = liveSocket;
     const onReaction = (data: { postId: string; reactions: Record<string, number> }) => {
       if (data.postId === post.id)
         setPost((p) => p ? { ...p, reactionSummary: data.reactions } : p);
     };
     socket.on(SOCKET_EVENTS.NEWSLETTER_REACTION_UPDATED, onReaction);
     return () => { socket.off(SOCKET_EVENTS.NEWSLETTER_REACTION_UPDATED, onReaction); };
-  }, [post]);
+  }, [post, liveSocket]);
 
   const handlePin = async () => {
     if (!post) return;

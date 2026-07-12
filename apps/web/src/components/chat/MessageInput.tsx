@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { useVoiceRecorder } from '@/hooks/useVoiceRecorder';
-import { getSocket } from '@/lib/socket-client';
+import { useLiveSocket } from '@/hooks/useSocket';
 import { SOCKET_EVENTS, FILE_LIMITS, MessageType } from '@karamooziyar/shared';
 import type { MessageDto } from '@karamooziyar/shared';
 import { useAuthStore } from '@/store/auth.store';
@@ -32,7 +32,8 @@ export function MessageInput({
   onCancelReply,
   disabled,
 }: MessageInputProps) {
-  const socket = getSocket();
+  // Reactive to socket replacement (hard rebuild) — see useLiveSocket.
+  const socket = useLiveSocket();
   const currentUser = useAuthStore((s) => s.user);
   const [text, setText] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);

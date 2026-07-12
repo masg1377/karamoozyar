@@ -211,19 +211,32 @@ export function triggerDiagnosticsRecovery(): void {
 
 // ─── Init (called from socket-client after the socket exists) ──────────────────
 
+// Sockets that already have the per-socket 'connect' recovery trigger
+// attached — mirrors the WeakSet-guarded pattern in attachSocketDiagnostics
+// so a hard rebuild (a genuinely NEW Socket.IO client instance — see
+// socket-client.ts) gets this trigger re-attached exactly once, instead of
+// silently losing it forever after the first rebuild.
+const connectTriggerAttached = new WeakSet<Socket>();
+
 /**
  * Attach recovery triggers. Called from getSocket() — i.e. after client-side
- * init, and (re)called with any fresh socket instance. Registration is
- * idempotent per socket; window/auth hooks attach once per JS boot.
+ * init, and (re)called with any fresh socket instance (including after a
+ * hard rebuild). The per-socket `connect` trigger is idempotent PER SOCKET
+ * (WeakSet-guarded); the window/auth hooks attach once per JS boot.
  */
 export function initDiagnosticsRecovery(socket: Socket): void {
   try {
     socketRef = socket;
+
+    // Trigger: successful socket connect (covers reconnects AND hard
+    // rebuilds — each fresh socket instance gets its own listener).
+    if (!connectTriggerAttached.has(socket)) {
+      connectTriggerAttached.add(socket);
+      socket.on('connect', () => schedule(timing.interBatchDelayMs));
+    }
+
     if (initialized) return;
     initialized = true;
-
-    // Trigger: successful socket connect (covers reconnects too).
-    socket.on('connect', () => schedule(timing.interBatchDelayMs));
 
     // Trigger: browser back online.
     if (typeof window !== 'undefined') {

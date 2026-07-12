@@ -17,6 +17,9 @@ const ALLOWED_KEYS = new Set([
   'deliveryState', 'attempt', 'reason',
   'socketId', 'connected', 'active', 'reconnecting', 'readyState',
   'transport', 'visibility', 'online', 'path',
+  // zombie-socket recovery metadata (chat_send + socket_rebuild events)
+  'oldSocketId', 'newSocketId', 'oldSocketGeneration', 'newSocketGeneration',
+  'rebuildReason', 'elapsedMs', 'failureReason',
 ]);
 
 const FORBIDDEN_KEYS = ['body', 'text', 'fileName', 'fileUrl', 'url', 'token', 'phone', 'firstName', 'lastName'];
@@ -225,6 +228,67 @@ describe('console diagnostics + sanitization', () => {
     }
     const chatEvt = mod.__getDiagnosticsBufferForTests()[1]!;
     expect(chatEvt.reason!.length).toBeLessThanOrEqual(160);
+  });
+});
+
+describe('socket-rebuild diagnostics (zombie-socket recovery)', () => {
+  it('records a socket_rebuild event with sanitized rebuild metadata only', async () => {
+    const mod = await freshModule();
+    mod.__resetDiagnosticsForTests();
+
+    mod.socketRebuildPhase({
+      phase: 'socket-rebuild-success',
+      oldSocketId: 'sock_old',
+      newSocketId: 'sock_new',
+      oldSocketGeneration: 1,
+      newSocketGeneration: 2,
+      rebuildReason: 'ack-timeout',
+      elapsedMs: 1234,
+    });
+
+    const evt = mod.__getDiagnosticsBufferForTests()[0]!;
+    expect(evt.kind).toBe('socket_rebuild');
+    expect(evt.phase).toBe('socket-rebuild-success');
+    expect(evt.oldSocketId).toBe('sock_old');
+    expect(evt.newSocketId).toBe('sock_new');
+    expect(evt.oldSocketGeneration).toBe(1);
+    expect(evt.newSocketGeneration).toBe(2);
+    expect(evt.rebuildReason).toBe('ack-timeout');
+    expect(evt.elapsedMs).toBe(1234);
+    for (const key of Object.keys(evt)) {
+      expect(ALLOWED_KEYS.has(key)).toBe(true);
+    }
+  });
+
+  it('logs the socket_rebuild console label distinctly from chat_send/lifecycle', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const mod = await freshModule();
+    mod.__resetDiagnosticsForTests();
+
+    mod.socketRebuildPhase({ phase: 'socket-rebuild-start', rebuildReason: 'ack-timeout' });
+
+    const labels = info.mock.calls.map((c) => c[0]);
+    expect(labels).toContain('[karamooz-chat-diag] socket_rebuild_phase');
+  });
+
+  it('a chatSendPhase call carrying rebuild metadata stays within the allowlist', async () => {
+    const mod = await freshModule();
+    mod.__resetDiagnosticsForTests();
+
+    mod.chatSendPhase({
+      clientMessageId: 'cm_abcdefgh',
+      conversationId: 'conv-1',
+      sendOrigin: 'new-message',
+      phase: 'fresh-socket-ack-timeout',
+      attempt: 2,
+      failureReason: 'fresh-socket-ack-timeout',
+    });
+
+    const evt = mod.__getDiagnosticsBufferForTests()[0]!;
+    expect(evt.failureReason).toBe('fresh-socket-ack-timeout');
+    for (const key of Object.keys(evt)) {
+      expect(ALLOWED_KEYS.has(key)).toBe(true);
+    }
   });
 });
 

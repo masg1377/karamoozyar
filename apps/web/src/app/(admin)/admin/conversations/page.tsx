@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import api from '@/lib/api-client';
-import { getSocket } from '@/lib/socket-client';
+import { useLiveSocket } from '@/hooks/useSocket';
 import { useChatStore } from '@/store/chat.store';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import type { ConversationSummaryDto, UserDto } from '@karamooziyar/shared';
@@ -221,6 +221,8 @@ export default function AdminConversationsPage() {
   const [search, setSearch] = useState('');
   const [showNewChat, setShowNewChat] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Reactive to socket replacement (hard rebuild) — see useLiveSocket.
+  const liveSocket = useLiveSocket();
 
   // Auto-navigate to a specific user's conversation when userId query param is present
   useEffect(() => {
@@ -250,13 +252,13 @@ export default function AdminConversationsPage() {
   useEffect(() => {
     void loadConversations(1, '');
 
-    const socket = getSocket();
+    const socket = liveSocket;
     const onConvUpdated = (conv: ConversationSummaryDto) => {
       updateConversation(conv);
     };
     socket.on(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, onConvUpdated);
     return () => { socket.off(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, onConvUpdated); };
-  }, [loadConversations, updateConversation]);
+  }, [loadConversations, updateConversation, liveSocket]);
 
   const handleSearch = (val: string) => {
     setSearch(val);

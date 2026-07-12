@@ -219,8 +219,20 @@ export function MessageBubble({
   const cm = message as ChatMessage;
   const state = cm.deliveryState;
   const isSending = state === 'queued' || state === 'uploading' || state === 'sending';
-  const isAwaitingReconnect = state === 'awaiting-reconnect';
+  // Any in-progress connectivity-recovery state (offline wait / hard rebuild /
+  // fresh-socket retry) — shown the same as "awaiting" in the tick icon, with
+  // a distinct Persian status string per state below.
+  const isAwaitingReconnect =
+    state === 'awaiting-connection' || state === 'rebuilding-connection' || state === 'retrying';
   const isFailed = state === 'failed';
+  const connectivityStatusText =
+    state === 'awaiting-connection'
+      ? 'در انتظار اتصال اینترنت…'
+      : state === 'rebuilding-connection'
+        ? 'در حال اتصال مجدد…'
+        : state === 'retrying'
+          ? 'در حال تلاش مجدد…'
+          : undefined;
   const isUnconfirmed = isSending || isAwaitingReconnect || isFailed; // not yet durably persisted
   const canCopy  = !isUnconfirmed && message.type === 'TEXT' && !!message.body;
   const canEdit  = !isUnconfirmed && isMine && message.type === 'TEXT' && !!onEdit;
@@ -421,7 +433,7 @@ export function MessageBubble({
               {isMine && !isFailed && (
                 <span
                   className="text-white/70"
-                  title={isAwaitingReconnect ? 'در انتظار اتصال مجدد…' : undefined}
+                  title={connectivityStatusText}
                 >
                   {isSending || isAwaitingReconnect
                     ? <Clock className={cn('w-3 h-3 inline opacity-70', isAwaitingReconnect && 'animate-pulse')} />

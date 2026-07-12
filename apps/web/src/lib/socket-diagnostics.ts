@@ -50,7 +50,25 @@ export type ChatSendPhase =
   | 'auto-retry-start'
   | 'manual-retry-start'
   | 'force-failed'
-  | 'state-change';
+  | 'state-change'
+  // ── Zombie-socket recovery (bounded: 8s ack timeout → 1 hard rebuild → 1 retry) ──
+  | 'offline-wait-start'
+  | 'offline-resume'
+  | 'retry-after-socket-rebuild'
+  | 'fresh-socket-ack-success'
+  | 'fresh-socket-ack-timeout'
+  | 'manual-retry-requires-fresh-socket'
+  | 'recovery-aborted';
+
+/** Socket hard-rebuild lifecycle — distinct `kind` from chat_send since a
+ *  rebuild is not itself scoped to one message (it may be shared by several
+ *  concurrently-timing-out sends). */
+export type SocketRebuildPhase =
+  | 'socket-marked-unhealthy'
+  | 'socket-rebuild-start'
+  | 'socket-rebuild-connect-wait'
+  | 'socket-rebuild-success'
+  | 'socket-rebuild-failed';
 
 export type LifecycleEventName =
   | 'socket_connect'
@@ -75,13 +93,13 @@ export type LifecycleEventName =
 export interface DiagEvent {
   seq: number;
   ts: number;
-  kind: 'lifecycle' | 'chat_send';
+  kind: 'lifecycle' | 'chat_send' | 'socket_rebuild';
   pageInstanceId: string;
   browserSessionId: string;
   // lifecycle
   event?: LifecycleEventName;
   // chat_send
-  phase?: ChatSendPhase;
+  phase?: ChatSendPhase | SocketRebuildPhase;
   sendOrigin?: SendOrigin;
   clientMessageId?: string;
   conversationId?: string;
@@ -99,6 +117,15 @@ export interface DiagEvent {
   visibility?: string;
   online?: boolean;
   path?: string;
+  // socket rebuild metadata (kind: 'socket_rebuild', or attached to a
+  // chat_send event describing the rebuild that gated it)
+  oldSocketId?: string;
+  newSocketId?: string;
+  oldSocketGeneration?: number;
+  newSocketGeneration?: number;
+  rebuildReason?: string;
+  elapsedMs?: number;
+  failureReason?: string;
 }
 
 // ─── Config ────────────────────────────────────────────────────────────────────
@@ -260,7 +287,12 @@ function record(partial: Partial<DiagEvent> & { kind: DiagEvent['kind'] }): void
     persist();
     persistLocalFirst(evt);
     try {
-      const label = evt.kind === 'lifecycle' ? evt.event : 'chat_send_phase';
+      const label =
+        evt.kind === 'lifecycle'
+          ? evt.event
+          : evt.kind === 'socket_rebuild'
+            ? 'socket_rebuild_phase'
+            : 'chat_send_phase';
       // eslint-disable-next-line no-console
       console.info(`${PREFIX} ${label}`, evt);
     } catch {
@@ -340,6 +372,13 @@ export function chatSendPhase(args: {
   deliveryState?: string;
   attempt?: number;
   reason?: string;
+  oldSocketId?: string;
+  newSocketId?: string;
+  oldSocketGeneration?: number;
+  newSocketGeneration?: number;
+  rebuildReason?: string;
+  elapsedMs?: number;
+  failureReason?: string;
 }): void {
   record({
     kind: 'chat_send',
@@ -350,6 +389,39 @@ export function chatSendPhase(args: {
     deliveryState: trunc(args.deliveryState, 32),
     attempt: typeof args.attempt === 'number' ? args.attempt : undefined,
     reason: trunc(args.reason, 160),
+    oldSocketId: trunc(args.oldSocketId, 64),
+    newSocketId: trunc(args.newSocketId, 64),
+    oldSocketGeneration: args.oldSocketGeneration,
+    newSocketGeneration: args.newSocketGeneration,
+    rebuildReason: trunc(args.rebuildReason, 64),
+    elapsedMs: args.elapsedMs,
+    failureReason: trunc(args.failureReason, 64),
+  });
+}
+
+/** Record a socket hard-rebuild phase transition (called only from
+ *  socket-client.ts). Not scoped to a single message — several sends may
+ *  share the one rebuild this describes. */
+export function socketRebuildPhase(args: {
+  phase: SocketRebuildPhase;
+  oldSocketId?: string;
+  newSocketId?: string;
+  oldSocketGeneration?: number;
+  newSocketGeneration?: number;
+  rebuildReason?: string;
+  elapsedMs?: number;
+  failureReason?: string;
+}): void {
+  record({
+    kind: 'socket_rebuild',
+    phase: args.phase,
+    oldSocketId: trunc(args.oldSocketId, 64),
+    newSocketId: trunc(args.newSocketId, 64),
+    oldSocketGeneration: args.oldSocketGeneration,
+    newSocketGeneration: args.newSocketGeneration,
+    rebuildReason: trunc(args.rebuildReason, 64),
+    elapsedMs: args.elapsedMs,
+    failureReason: trunc(args.failureReason, 64),
   });
 }
 

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useChatStore } from '@/store/chat.store';
 import type { ChatMessage } from '@/store/chat.store';
 import api from '@/lib/api-client';
-import { getSocket } from '@/lib/socket-client';
+import { useLiveSocket } from '@/hooks/useSocket';
 import type { CursorPaginatedResponse, MessageDto } from '@karamooziyar/shared';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 
@@ -20,7 +20,10 @@ export function useMessages(conversationId: string) {
     removeMessage,
     setTyping,
   } = useChatStore();
-  const socket = getSocket();
+  // Reactive to socket replacement (hard rebuild) — see useLiveSocket. Keeps
+  // CHAT_MESSAGE_NEW/UPDATED/DELETED/TYPING listeners attached to whichever
+  // socket is actually live instead of going stale on a disconnected old one.
+  const socket = useLiveSocket();
   const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   const msgs = messages[conversationId] ?? [];

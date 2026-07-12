@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { Socket } from 'socket.io-client';
-import { getSocket } from '@/lib/socket-client';
+import { getSocket, subscribeSocket } from '@/lib/socket-client';
 import { useAuthStore } from '@/store/auth.store';
 
 export function useSocket(): Socket | null {
@@ -17,10 +17,29 @@ export function useSocket(): Socket | null {
       setSocket(null);
       return;
     }
-    setSocket(getSocket());
+    getSocket();
+    // Subscribe (not just a one-off getSocket()) so a hard rebuild (zombie
+    // socket recovery) or a login/logout socket swap re-renders this
+    // consumer with the fresh instance instead of leaving it holding a
+    // disconnected, listener-stripped socket.
+    const unsubscribe = subscribeSocket(setSocket);
+    return unsubscribe;
     // Don't disconnect on unmount — shared connection
   }, [isAuthenticated]);
 
+  return socket;
+}
+
+/**
+ * Always-current live socket, for consumers that attach listeners in an
+ * effect and must keep them attached to whichever Socket.IO client is
+ * actually live (a hard rebuild replaces the underlying client with a new
+ * object — see socket-client.ts). Re-renders the owning component on every
+ * replacement so the effect's `[socket]` dependency re-runs and reattaches.
+ */
+export function useLiveSocket(): Socket {
+  const [socket, setSocket] = useState<Socket>(() => getSocket());
+  useEffect(() => subscribeSocket(setSocket), []);
   return socket;
 }
 

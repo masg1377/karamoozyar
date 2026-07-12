@@ -15,6 +15,7 @@ import { DateDivider, StickyDate } from '@/components/chat/DateDivider';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
 import { UserAvatar } from '@/components/shared/UserAvatar';
 import { getSocket } from '@/lib/socket-client';
+import { useLiveSocket } from '@/hooks/useSocket';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import type { ConversationSummaryDto, MessageDto } from '@karamooziyar/shared';
 import { cn, isSameDay, formatDayLabel, lastSeenableMessageId } from '@/lib/utils';
@@ -62,10 +63,15 @@ export default function AdminConversationPage() {
   const chatRootRef = useRef<HTMLDivElement>(null);
   useIosKeyboardInset(chatRootRef);
 
+  // Reactive to socket replacement (hard rebuild) — see useLiveSocket. Without
+  // this, a zombie-socket rebuild while this page is mounted would leave the
+  // CHAT_MESSAGE_PINNED listener registered on the disconnected old socket.
+  const liveSocket = useLiveSocket();
+
   // Real-time pin updates
   useEffect(() => {
     if (!conversationId) return;
-    const socket = getSocket();
+    const socket = liveSocket;
     const onPinned = (payload: { action: 'pin' | 'unpin'; message?: MessageDto; messageId?: string }) => {
       if (payload.action === 'pin' && payload.message) {
         setPinnedMessages((prev) => {
@@ -78,7 +84,7 @@ export default function AdminConversationPage() {
     };
     socket.on(SOCKET_EVENTS.CHAT_MESSAGE_PINNED, onPinned);
     return () => { socket.off(SOCKET_EVENTS.CHAT_MESSAGE_PINNED, onPinned); };
-  }, [conversationId]);
+  }, [conversationId, liveSocket]);
 
   useEffect(() => {
     if (!conversationId || messages.length === 0) return;

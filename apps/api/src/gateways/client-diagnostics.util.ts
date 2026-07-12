@@ -49,6 +49,23 @@ export const DIAG_CHAT_SEND_PHASES: ReadonlySet<string> = new Set([
   'manual-retry-start',
   'force-failed',
   'state-change',
+  // ── Zombie-socket recovery ──
+  'offline-wait-start',
+  'offline-resume',
+  'retry-after-socket-rebuild',
+  'fresh-socket-ack-success',
+  'fresh-socket-ack-timeout',
+  'manual-retry-requires-fresh-socket',
+  'recovery-aborted',
+]);
+
+/** Socket hard-rebuild lifecycle phases — only valid when kind === 'socket_rebuild'. */
+export const DIAG_SOCKET_REBUILD_PHASES: ReadonlySet<string> = new Set([
+  'socket-marked-unhealthy',
+  'socket-rebuild-start',
+  'socket-rebuild-connect-wait',
+  'socket-rebuild-success',
+  'socket-rebuild-failed',
 ]);
 
 export const DIAG_SEND_ORIGINS: ReadonlySet<string> = new Set([
@@ -81,6 +98,13 @@ const ALLOWED_EVENT_KEYS: ReadonlySet<string> = new Set([
   'visibility',
   'online',
   'path',
+  'oldSocketId',
+  'newSocketId',
+  'oldSocketGeneration',
+  'newSocketGeneration',
+  'rebuildReason',
+  'elapsedMs',
+  'failureReason',
 ]);
 
 const STRING_MAX: Readonly<Record<string, number>> = {
@@ -98,10 +122,14 @@ const STRING_MAX: Readonly<Record<string, number>> = {
   transport: 24,
   visibility: 16,
   path: 120,
+  oldSocketId: 64,
+  newSocketId: 64,
+  rebuildReason: 64,
+  failureReason: 64,
 };
 
 const BOOL_KEYS = new Set(['connected', 'active', 'reconnecting', 'online']);
-const NUM_KEYS = new Set(['seq', 'ts', 'attempt']);
+const NUM_KEYS = new Set(['seq', 'ts', 'attempt', 'oldSocketGeneration', 'newSocketGeneration', 'elapsedMs']);
 
 export interface DiagBatch {
   pageInstanceId: string;
@@ -132,18 +160,22 @@ function validateEvent(e: unknown, index: number): string | null {
     const max = STRING_MAX[key];
     if (max !== undefined && (typeof value !== 'string' || value.length > max))
       return `event[${index}].${key} invalid string`;
-    if (key === 'kind' && value !== 'lifecycle' && value !== 'chat_send')
+    if (key === 'kind' && value !== 'lifecycle' && value !== 'chat_send' && value !== 'socket_rebuild')
       return `event[${index}].kind invalid`;
   }
 
   const kind = e['kind'];
-  if (kind !== 'lifecycle' && kind !== 'chat_send') return `event[${index}] missing kind`;
+  if (kind !== 'lifecycle' && kind !== 'chat_send' && kind !== 'socket_rebuild')
+    return `event[${index}] missing kind`;
   if (typeof e['ts'] !== 'number' || typeof e['seq'] !== 'number')
     return `event[${index}] missing ts/seq`;
 
   if (kind === 'lifecycle') {
     if (!DIAG_LIFECYCLE_EVENTS.has(e['event'] as string))
       return `event[${index}] unknown lifecycle event`;
+  } else if (kind === 'socket_rebuild') {
+    if (!DIAG_SOCKET_REBUILD_PHASES.has(e['phase'] as string))
+      return `event[${index}] unknown socket-rebuild phase`;
   } else {
     if (!DIAG_CHAT_SEND_PHASES.has(e['phase'] as string))
       return `event[${index}] unknown chat-send phase`;

@@ -4,7 +4,7 @@ import { useEffect, useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useNewsletterStore } from '@/store/newsletter.store';
 import api from '@/lib/api-client';
-import { getSocket } from '@/lib/socket-client';
+import { useLiveSocket } from '@/hooks/useSocket';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import type { CursorPaginatedResponse, NewsletterPostDto } from '@karamooziyar/shared';
 import { NewsletterListCard } from '@/components/newsletter/NewsletterPost';
@@ -21,6 +21,8 @@ export default function UserNewsletterPage() {
     useNewsletterStore();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  // Reactive to socket replacement (hard rebuild) — see useLiveSocket.
+  const liveSocket = useLiveSocket();
 
   const loadPosts = useCallback(async (cursor?: string) => {
     setLoading(true);
@@ -39,7 +41,7 @@ export default function UserNewsletterPage() {
 
   useEffect(() => {
     void loadPosts();
-    const socket = getSocket();
+    const socket = liveSocket;
     socket.emit(SOCKET_EVENTS.NEWSLETTER_JOIN);
 
     const onNew = (post: NewsletterPostDto) => addPost(post);
@@ -59,7 +61,7 @@ export default function UserNewsletterPage() {
       socket.off(SOCKET_EVENTS.NEWSLETTER_POST_DELETED, onDeleted);
       socket.off(SOCKET_EVENTS.NEWSLETTER_REACTION_UPDATED, onReaction);
     };
-  }, [loadPosts, addPost, updatePost, removePost]);
+  }, [loadPosts, addPost, updatePost, removePost, liveSocket]);
 
   if (initialLoading) return (
     <div className="h-64 flex items-center justify-center">

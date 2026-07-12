@@ -13,6 +13,7 @@ import { PinnedMessagesBar } from '@/components/chat/PinnedMessagesBar';
 import { DateDivider, StickyDate } from '@/components/chat/DateDivider';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
 import { getSocket } from '@/lib/socket-client';
+import { useLiveSocket } from '@/hooks/useSocket';
 import api from '@/lib/api-client';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import type { ConversationDetailDto, MessageDto } from '@karamooziyar/shared';
@@ -50,6 +51,11 @@ export default function UserChatPage() {
   const chatRootRef = useRef<HTMLDivElement>(null);
   useIosKeyboardInset(chatRootRef);
 
+  // Reactive to socket replacement (hard rebuild) — see useLiveSocket. Without
+  // this, a zombie-socket rebuild while this page is mounted would leave the
+  // CHAT_MESSAGE_PINNED listener registered on the disconnected old socket.
+  const liveSocket = useLiveSocket();
+
   // Load pinned messages when conversation is ready
   useEffect(() => {
     if (!conversationId) return;
@@ -62,7 +68,7 @@ export default function UserChatPage() {
   // Listen for real-time pin events
   useEffect(() => {
     if (!conversationId) return;
-    const socket = getSocket();
+    const socket = liveSocket;
     const onPinned = (payload: { action: 'pin' | 'unpin'; message?: MessageDto; messageId?: string }) => {
       if (payload.action === 'pin' && payload.message) {
         setPinnedMessages((prev) => {
@@ -75,7 +81,7 @@ export default function UserChatPage() {
     };
     socket.on(SOCKET_EVENTS.CHAT_MESSAGE_PINNED, onPinned);
     return () => { socket.off(SOCKET_EVENTS.CHAT_MESSAGE_PINNED, onPinned); };
-  }, [conversationId]);
+  }, [conversationId, liveSocket]);
 
   // سین خودکار — تا وقتی داخل صفحه چت هستیم، هر پیام تازه‌رسیده بلافاصله seen شود
   // (سرور بعدش unreadByUser را صفر و conversation:updated را emit می‌کند → badge/نوتیف پاک می‌شود)
