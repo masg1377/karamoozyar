@@ -99,13 +99,25 @@ export function reconcileMessage(
 
 /**
  * Merge a freshly fetched server page into the local list (used on initial
- * load and after reconnect). Server data is authoritative for confirmed
- * messages, but locally PENDING messages (queued/uploading/sending/failed)
- * the server does not yet know about are preserved and kept after the
- * server items (they are the newest, by construction).
+ * load and after reconnect). Server data is authoritative for messages it
+ * actually contains, but ANY local message this particular page does not
+ * happen to include — pending (queued/uploading/sending/awaiting-connection/
+ * rebuilding-connection/retrying/failed) OR already confirmed (sent/seen) —
+ * is preserved and kept after the server items (they are the newest, by
+ * construction).
  *
  * This is the fix for "messages disappear after reconnect": a refetch can no
- * longer blow away an in-flight or failed optimistic message.
+ * longer blow away an in-flight or failed optimistic message, NOR a message
+ * that was already reconciled to `sent` by a real ACK but that this specific
+ * snapshot — fetched concurrently with, or racing behind, that ACK — doesn't
+ * yet contain. A REST page is a snapshot, not an authoritative "this is the
+ * complete set, delete anything else": genuine removal is handled exclusively
+ * by the explicit CHAT_MESSAGE_DELETED broadcast / `removeMessage`, never by
+ * a message's mere absence from one fetched page.
+ *
+ * (`isPendingLocal` is still exported/tested independently — other pending-
+ * state UI treatment may use it — but is no longer what gates preservation
+ * here, since a confirmed message must be preserved the exact same way.)
  */
 export function mergeServerMessages(
   local: ClientMessage[],
@@ -114,11 +126,8 @@ export function mergeServerMessages(
   const serverKeys = new Set(server.map(identityKey));
   const serverIds = new Set(server.map((m) => m.id));
 
-  const preservedPending = local.filter(
-    (m) =>
-      isPendingLocal(m) &&
-      !serverKeys.has(identityKey(m)) &&
-      !serverIds.has(m.id),
+  const preservedLocal = local.filter(
+    (m) => !serverKeys.has(identityKey(m)) && !serverIds.has(m.id),
   );
 
   const confirmedServer = server.map((m) => ({
@@ -127,5 +136,5 @@ export function mergeServerMessages(
       (m.status === 'SEEN' ? 'seen' : 'sent')) as DeliveryState,
   }));
 
-  return [...confirmedServer, ...preservedPending];
+  return [...confirmedServer, ...preservedLocal];
 }

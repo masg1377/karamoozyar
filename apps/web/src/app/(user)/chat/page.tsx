@@ -18,6 +18,7 @@ import api from '@/lib/api-client';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import type { ConversationDetailDto, MessageDto } from '@karamooziyar/shared';
 import { isSameDay, formatDayLabel, lastSeenableMessageId } from '@/lib/utils';
+import { identityKey } from '@/lib/message-merge';
 import { goBackOrReplace } from '@/lib/navigation';
 import { toast } from 'sonner';
 import { ChevronUp, Shield } from 'lucide-react';
@@ -214,7 +215,17 @@ export default function UserChatPage() {
           const prev = messages[i - 1];
           const showDivider = !prev || !isSameDay(prev.createdAt, msg.createdAt);
           return (
-            <Fragment key={msg.id}>
+            // Keyed by the stable client-generated identity (falls back to the
+            // server id for legacy rows with no clientMessageId), NOT msg.id
+            // directly. An optimistic (offline-queued) message's `id` starts as
+            // its clientMessageId and is later overwritten with the real server
+            // id once the send is acked. Keying on msg.id made React treat the
+            // reconciled message as a brand-new list item — unmounting the
+            // optimistic bubble and mounting a fresh one in its place — which is
+            // what caused the visible "jump" right after reconnect. The ref map
+            // below intentionally keeps using the real msg.id: reply-to-message
+            // scrolling always targets an already-persisted message's real id.
+            <Fragment key={identityKey(msg)}>
               {showDivider && <DateDivider label={formatDayLabel(msg.createdAt)} />}
               <div ref={(el) => { if (el) messageRefs.current.set(msg.id, el); else messageRefs.current.delete(msg.id); }}>
                 <MessageBubble

@@ -19,6 +19,7 @@ import { useLiveSocket } from '@/hooks/useSocket';
 import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import type { ConversationSummaryDto, MessageDto } from '@karamooziyar/shared';
 import { cn, isSameDay, formatDayLabel, lastSeenableMessageId } from '@/lib/utils';
+import { identityKey } from '@/lib/message-merge';
 import { goBackOrReplace } from '@/lib/navigation';
 import { toast } from 'sonner';
 import { ArrowRight, ChevronUp } from 'lucide-react';
@@ -207,7 +208,13 @@ export default function AdminConversationPage() {
           const prev = messages[i - 1];
           const showDivider = !prev || !isSameDay(prev.createdAt, msg.createdAt);
           return (
-            <Fragment key={msg.id}>
+            // See apps/web/src/app/(user)/chat/page.tsx for the full explanation:
+            // keying by the stable clientMessageId-preferring identity (not
+            // msg.id, which is overwritten with the real server id once an
+            // optimistic/offline-queued message is acked) prevents React from
+            // unmounting+remounting the bubble on reconcile, which is what
+            // caused the visible "jump" right after reconnect.
+            <Fragment key={identityKey(msg)}>
               {showDivider && <DateDivider label={formatDayLabel(msg.createdAt)} />}
               <div ref={(el) => { if (el) messageRefs.current.set(msg.id, el); else messageRefs.current.delete(msg.id); }}>
                 <MessageBubble
