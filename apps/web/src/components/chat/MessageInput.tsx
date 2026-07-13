@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
+import type { Socket } from 'socket.io-client';
 import { cn } from '@/lib/utils';
 import { useVoiceRecorder } from '@/hooks/useVoiceRecorder';
 import { useLiveSocket } from '@/hooks/useSocket';
@@ -14,6 +15,20 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import EmojiPickerComponent from 'emoji-picker-react';
+
+// Layout effects run synchronously right after a commit — before any passive
+// effect anywhere in the tree flushes and before the browser paints. That is
+// the earliest point React guarantees our code runs after `socket` changes,
+// which matters here: a hard rebuild replaces the live socket, and both the
+// delayed typing-stop timer and the very next typing keystroke must never
+// emit through the socket that was just replaced. A plain `useEffect` would
+// leave a real (if usually brief) window where a synchronously-following
+// event could still read the stale ref. MessageInput is a 'use client'
+// component that Next.js still renders once on the server for the initial
+// HTML, where `useLayoutEffect` is a no-op with a dev warning — this
+// isomorphic guard avoids that noise while keeping the synchronous guarantee
+// on the client, where it actually matters.
+const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
 interface MessageInputProps {
   conversationId: string;
@@ -45,17 +60,45 @@ export function MessageInput({
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   // Guard: prevent setState after unmount
   const mountedRef = useRef(true);
+  // Mirrors the live socket without being a dependency of handleTyping or the
+  // mount/unmount effect below — a hard rebuild (see hardRebuildSocket)
+  // replaces `socket` while this component may stay mounted on the same
+  // conversation, and EVERY typing-related emit (immediate start/stop, the
+  // delayed timer's stop, and the unmount/conversation-change stop) must go
+  // through whichever socket is CURRENT at emit time, not the one captured
+  // when a closure (e.g. the setTimeout callback) was first created.
+  const socketRef = useRef<Socket | null>(socket);
+  useIsomorphicLayoutEffect(() => {
+    socketRef.current = socket;
+  }, [socket]);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      // Clear typing timer and notify server
-      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-      socket.emit(SOCKET_EVENTS.CHAT_TYPING_STOP, { conversationId });
+      // Runs on every conversationId change too, not just a true unmount —
+      // notify whichever socket is actually live right now that typing
+      // stopped in the conversation being left. Only the timer itself (not
+      // the socket ref) is torn down here; the ref must stay populated for
+      // the rest of this component instance's life.
+      if (typingTimerRef.current) {
+        clearTimeout(typingTimerRef.current);
+        typingTimerRef.current = null;
+      }
+      socketRef.current?.emit(SOCKET_EVENTS.CHAT_TYPING_STOP, { conversationId });
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
+
+  // True-unmount-only teardown, deliberately separate from the effect above
+  // (which also fires on every conversationId change, where the ref must
+  // stay populated). Drops the ref so nothing still pending — none should
+  // remain, since the timer was already cleared above — could ever emit
+  // through a stale socket after this component instance is gone.
+  useEffect(() => {
+    return () => {
+      socketRef.current = null;
+    };
+  }, []);
 
   // Close emoji picker on outside click / touch
   useEffect(() => {
@@ -114,7 +157,7 @@ export function MessageInput({
   const handleTyping = useCallback((typing: boolean) => {
     if (typing !== isTyping) {
       if (mountedRef.current) setIsTyping(typing);
-      socket.emit(
+      socketRef.current?.emit(
         typing ? SOCKET_EVENTS.CHAT_TYPING_START : SOCKET_EVENTS.CHAT_TYPING_STOP,
         { conversationId },
       );
@@ -124,10 +167,10 @@ export function MessageInput({
       typingTimerRef.current = setTimeout(() => {
         if (!mountedRef.current) return;
         setIsTyping(false);
-        socket.emit(SOCKET_EVENTS.CHAT_TYPING_STOP, { conversationId });
+        socketRef.current?.emit(SOCKET_EVENTS.CHAT_TYPING_STOP, { conversationId });
       }, 2000);
     }
-  }, [isTyping, conversationId, socket]);
+  }, [isTyping, conversationId]);
 
   const sendTextMessage = () => {
     const body = text.trim();

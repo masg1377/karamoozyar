@@ -87,7 +87,13 @@ function lastMessage(conversationId: string) {
 beforeEach(async () => {
   outboxMod.__resetOutboxForTests();
   socketClientMod.__resetSocketClientForTests();
-  server.resetBookkeeping();
+  server.resetScenarioState();
+  // The previous test's afterEach called disconnectSocket(), which sends a
+  // real disconnect over the wire but does not synchronously guarantee the
+  // server has processed it yet. Wait for the real close before clearing
+  // connection history, so a still-live connection can never be hidden and
+  // the next connIndex can never collide with one still open.
+  await server.disconnectAllAndResetConnections();
   chatStoreMod.useChatStore.setState({ messages: {}, conversations: [], typingUsers: {}, hasMore: {}, nextCursor: {} });
   __resetDiagnosticsForTests();
 });

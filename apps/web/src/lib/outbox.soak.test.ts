@@ -57,10 +57,14 @@ function findMessage(conversationId: string, cid: string) {
   return messages(conversationId).find((m) => m.clientMessageId === cid);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   outboxMod.__resetOutboxForTests();
   socketClientMod.__resetSocketClientForTests();
-  server.resetBookkeeping();
+  server.resetScenarioState();
+  // See outbox.integration.test.ts for why this must be awaited: the
+  // previous test's afterEach only *initiates* a real disconnect; clearing
+  // connection history must wait for the server to actually see it close.
+  await server.disconnectAllAndResetConnections();
   chatStoreMod.useChatStore.setState({ messages: {}, conversations: [], typingUsers: {}, hasMore: {}, nextCursor: {} });
 });
 
