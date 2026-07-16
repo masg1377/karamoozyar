@@ -19,8 +19,9 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { SmsProviderService } from './sms.provider';
 
 const INACTIVITY_HOURS = 24;
-const SMS_TEXT =
-  'شما یک پیام خوانده‌نشده در سامانه کارآموزیار دارید. برای مشاهده وارد سامانه شوید.';
+// متن واقعی این پیامک در پنل پیشگام‌رایان (تمپلیت 100562) ثبت شده:
+// "{0} عزیز، در کارآموزیار پیام خوانده‌نشده دارید. وارد شوید."
+// {0} = firstName کاربر/ادمین — نگاه کنید به SmsProviderService.sendNotification
 
 // Convenience alias so we don't scatter casts everywhere
 const anyPrisma = (p: PrismaService): any => p as any; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -74,12 +75,17 @@ export class NotificationsService {
         },
       },
       include: {
-        user: { select: { id: true, phoneNumber: true, lastSeenAt: true } },
+        user: { select: { id: true, phoneNumber: true, lastSeenAt: true, firstName: true } },
       },
     });
 
     for (const conv of conversations) {
-      const user = conv.user as { id: string; phoneNumber: string | null; lastSeenAt: Date | null };
+      const user = conv.user as {
+        id: string;
+        phoneNumber: string | null;
+        lastSeenAt: Date | null;
+        firstName: string | null;
+      };
       if (!user.phoneNumber) continue;
 
       try {
@@ -87,6 +93,7 @@ export class NotificationsService {
           userId: user.id,
           conversationId: conv.id,
           phone: user.phoneNumber,
+          firstName: user.firstName ?? '',
         });
       } catch (err) {
         // One bad recipient (SMS provider error, log-write failure, etc.) must
@@ -117,7 +124,7 @@ export class NotificationsService {
         deletedAt: null,
         OR: [{ lastSeenAt: null }, { lastSeenAt: { lt: threshold } }],
       },
-      select: { id: true, phoneNumber: true },
+      select: { id: true, phoneNumber: true, firstName: true },
     });
 
     for (const admin of admins) {
@@ -127,6 +134,7 @@ export class NotificationsService {
           adminId: admin.id,
           conversationId: null,
           phone: admin.phoneNumber,
+          firstName: admin.firstName ?? '',
         });
       } catch (err) {
         this.logger.warn(`Inactivity notification failed for admin=${admin.id}: ${String(err)}`);
@@ -139,6 +147,7 @@ export class NotificationsService {
     adminId?: string;
     conversationId: string | null;
     phone: string;
+    firstName: string;
   }): Promise<void> {
     const db = anyPrisma(this.prisma);
     const since24h = new Date(Date.now() - INACTIVITY_HOURS * 60 * 60 * 1000);
@@ -157,8 +166,8 @@ export class NotificationsService {
 
     if (existing) return; // Already sent within 24h — do not spam
 
-    // Send SMS
-    const result = await this.sms.send({ to: opts.phone, message: SMS_TEXT });
+    // Send SMS (dedicated reminder template — no longer the login OTP template)
+    const result = await this.sms.sendNotification(opts.phone, opts.firstName);
 
     // Persist log entry regardless of success/failure
     await db.notificationLog.create({

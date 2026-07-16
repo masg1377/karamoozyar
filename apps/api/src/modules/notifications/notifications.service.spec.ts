@@ -28,7 +28,7 @@ describe('NotificationsService.notifyInactiveUsers', () => {
 
   it('does not build a query-level null filter on the non-nullable phoneNumber column', async () => {
     const prisma = buildPrisma([]);
-    const sms = { send: jest.fn() } as unknown as SmsProviderService;
+    const sms = { sendNotification: jest.fn() } as unknown as SmsProviderService;
     const service = new NotificationsService(prisma, sms);
 
     await (service as any).notifyInactiveUsers(new Date());
@@ -40,29 +40,29 @@ describe('NotificationsService.notifyInactiveUsers', () => {
 
   it('excludes a user with a null phoneNumber and still notifies the rest', async () => {
     const conversations = [
-      { id: 'conv-1', user: { id: 'user-1', phoneNumber: '09120000001', lastSeenAt: null } },
-      { id: 'conv-2', user: { id: 'user-2', phoneNumber: null, lastSeenAt: null } },
+      { id: 'conv-1', user: { id: 'user-1', phoneNumber: '09120000001', lastSeenAt: null, firstName: 'علی' } },
+      { id: 'conv-2', user: { id: 'user-2', phoneNumber: null, lastSeenAt: null, firstName: 'رضا' } },
     ];
     const prisma = buildPrisma(conversations);
     const sms = {
-      send: jest.fn().mockResolvedValue({ success: true, messageId: 'm1' }),
+      sendNotification: jest.fn().mockResolvedValue({ success: true, messageId: 'm1' }),
     } as unknown as SmsProviderService;
     const service = new NotificationsService(prisma, sms);
 
     await (service as any).notifyInactiveUsers(new Date());
 
-    expect(sms.send).toHaveBeenCalledTimes(1);
-    expect(sms.send).toHaveBeenCalledWith(expect.objectContaining({ to: '09120000001' }));
+    expect(sms.sendNotification).toHaveBeenCalledTimes(1);
+    expect(sms.sendNotification).toHaveBeenCalledWith('09120000001', 'علی');
   });
 
   it('does not let one recipient failure abort the rest of the batch', async () => {
     const conversations = [
-      { id: 'conv-1', user: { id: 'user-1', phoneNumber: '09120000001', lastSeenAt: null } },
-      { id: 'conv-2', user: { id: 'user-2', phoneNumber: '09120000002', lastSeenAt: null } },
+      { id: 'conv-1', user: { id: 'user-1', phoneNumber: '09120000001', lastSeenAt: null, firstName: 'علی' } },
+      { id: 'conv-2', user: { id: 'user-2', phoneNumber: '09120000002', lastSeenAt: null, firstName: 'رضا' } },
     ];
     const prisma = buildPrisma(conversations);
     const sms = {
-      send: jest
+      sendNotification: jest
         .fn()
         .mockRejectedValueOnce(new Error('sms provider down'))
         .mockResolvedValueOnce({ success: true, messageId: 'm2' }),
@@ -71,6 +71,6 @@ describe('NotificationsService.notifyInactiveUsers', () => {
 
     await expect((service as any).notifyInactiveUsers(new Date())).resolves.toBeUndefined();
 
-    expect(sms.send).toHaveBeenCalledTimes(2);
+    expect(sms.sendNotification).toHaveBeenCalledTimes(2);
   });
 });
