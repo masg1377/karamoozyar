@@ -161,6 +161,11 @@ export interface AdminStatsDto {
   unreadConversations: number;
   totalMessages: number;
   totalNewsletterPosts: number;
+  recentActivity: {
+    latestNewsletterPost: { id: string; title: string | null; isEdited: boolean; createdAt: string } | null;
+    latestUnreadAt: string | null;
+    latestActiveUser: { id: string; firstName: string; lastName: string; lastSeenAt: string } | null;
+  };
 }
 
 export interface UploadResponseDto {

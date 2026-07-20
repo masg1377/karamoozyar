@@ -6,6 +6,9 @@ import { useAuthStore } from '@/store/auth.store';
 import api from '@/lib/api-client';
 import type { AdminStatsDto } from '@karamooziyar/shared';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
+import { timeAgo } from '@/lib/utils';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export default function AdminDashboardPage() {
   const user = useAuthStore((s) => s.user);
@@ -144,27 +147,40 @@ export default function AdminDashboardPage() {
           <h2 style={{ fontSize: 14, fontWeight: 700, color: '#1e293b', margin: '0 0 10px' }}>آخرین فعالیت‌ها</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
 
-            {/* Item 1 */}
-            <Link href="/admin/newsletter" style={{
-              background: 'white', borderRadius: 18, padding: '14px 14px', textDecoration: 'none',
-              display: 'flex', alignItems: 'center', gap: 12,
-              boxShadow: '0 2px 10px rgba(0,0,0,0.04)', border: '1px solid rgba(10,189,227,0.07)',
-            }}>
-              <div style={{ width: 40, height: 40, borderRadius: 14, background: 'linear-gradient(135deg, #E3F6FC, #BAE9F8)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="#0ABDE3" strokeWidth={1.6} width={18} height={18}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                </svg>
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', margin: 0 }}>اطلاعیه جدید</p>
-                <p style={{ fontSize: 11, color: '#94a3b8', margin: '3px 0 0' }}>چند لحظه پیش</p>
-              </div>
-              <span style={{ fontSize: 10, fontWeight: 700, padding: '4px 10px', borderRadius: 8, background: '#E0F9FF', color: '#0ABDE3', flexShrink: 0 }}>
-                جدید
-              </span>
-            </Link>
+            {/* Item 1 — latest newsletter post (real data, hidden if none exist yet) */}
+            {stats.recentActivity.latestNewsletterPost && (() => {
+              const post = stats.recentActivity.latestNewsletterPost;
+              const isRecent = Date.now() - new Date(post.createdAt).getTime() < DAY_MS;
+              const badge = isRecent
+                ? { label: 'جدید', bg: '#E0F9FF', color: '#0ABDE3' }
+                : post.isEdited
+                  ? { label: 'ویرایش شده', bg: '#FEF3C7', color: '#D97706' }
+                  : { label: 'منتشر شده', bg: '#F1F5F9', color: '#64748B' };
+              return (
+                <Link href="/admin/newsletter" style={{
+                  background: 'white', borderRadius: 18, padding: '14px 14px', textDecoration: 'none',
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  boxShadow: '0 2px 10px rgba(0,0,0,0.04)', border: '1px solid rgba(10,189,227,0.07)',
+                }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 14, background: 'linear-gradient(135deg, #E3F6FC, #BAE9F8)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="#0ABDE3" strokeWidth={1.6} width={18} height={18}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                    </svg>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {post.title?.trim() || 'اطلاعیه بدون عنوان'}
+                    </p>
+                    <p style={{ fontSize: 11, color: '#94a3b8', margin: '3px 0 0' }}>{timeAgo(post.createdAt)}</p>
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '4px 10px', borderRadius: 8, background: badge.bg, color: badge.color, flexShrink: 0 }}>
+                    {badge.label}
+                  </span>
+                </Link>
+              );
+            })()}
 
-            {/* Item 2 */}
+            {/* Item 2 — unread conversations (real count + real most-recent timestamp) */}
             {stats.unreadConversations > 0 && (
               <Link href="/admin/conversations?filter=unread" style={{
                 background: 'white', borderRadius: 18, padding: '14px 14px', textDecoration: 'none',
@@ -179,17 +195,19 @@ export default function AdminDashboardPage() {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <p style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', margin: 0 }}>
-                    {stats.unreadConversations} پیام نخوانده
+                    {stats.unreadConversations.toLocaleString('fa-IR')} پیام نخوانده
                   </p>
-                  <p style={{ fontSize: 11, color: '#94a3b8', margin: '3px 0 0' }}>۱ ساعت پیش</p>
+                  <p style={{ fontSize: 11, color: '#94a3b8', margin: '3px 0 0' }}>
+                    {stats.recentActivity.latestUnreadAt ? timeAgo(stats.recentActivity.latestUnreadAt) : ''}
+                  </p>
                 </div>
-                <span style={{ fontSize: 10, fontWeight: 700, padding: '4px 10px', borderRadius: 8, background: '#D1FAE5', color: '#059669', flexShrink: 0 }}>
-                  تکمیل
+                <span style={{ fontSize: 10, fontWeight: 700, padding: '4px 10px', borderRadius: 8, background: '#FEE2E2', color: '#DC2626', flexShrink: 0 }}>
+                  نیاز به بررسی
                 </span>
               </Link>
             )}
 
-            {/* Item 3 */}
+            {/* Item 3 — most recently active trainee (real name + real lastSeenAt, real active count) */}
             <Link href="/admin/users" style={{
               background: 'white', borderRadius: 18, padding: '14px 14px', textDecoration: 'none',
               display: 'flex', alignItems: 'center', gap: 12,
@@ -202,11 +220,19 @@ export default function AdminDashboardPage() {
                 </svg>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', margin: 0 }}>کارآموزان فعال</p>
-                <p style={{ fontSize: 11, color: '#94a3b8', margin: '3px 0 0' }}>دیروز</p>
+                <p style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {stats.recentActivity.latestActiveUser
+                    ? `${stats.recentActivity.latestActiveUser.firstName} ${stats.recentActivity.latestActiveUser.lastName}`
+                    : 'کارآموزان فعال'}
+                </p>
+                <p style={{ fontSize: 11, color: '#94a3b8', margin: '3px 0 0' }}>
+                  {stats.recentActivity.latestActiveUser
+                    ? timeAgo(stats.recentActivity.latestActiveUser.lastSeenAt)
+                    : 'هنوز هیچ کارآموزی وارد نشده'}
+                </p>
               </div>
               <span style={{ fontSize: 10, fontWeight: 700, padding: '4px 10px', borderRadius: 8, background: '#EDE9FE', color: '#7C3AED', flexShrink: 0 }}>
-                فعال
+                {stats.activeUsers.toLocaleString('fa-IR')} فعال
               </span>
             </Link>
 
