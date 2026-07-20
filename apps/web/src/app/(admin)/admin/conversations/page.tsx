@@ -226,6 +226,10 @@ export default function AdminConversationsPage() {
   const [showNewChat, setShowNewChat] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  // Set right before we ourselves push a URL change from handleToggleUnread, so the
+  // URL-sync effect below (which reacts to `searchParams`) can ignore the resulting
+  // navigation instead of racing it — see handleToggleUnread for details.
+  const skipNextFilterSyncRef = useRef(false);
   // Reactive to socket replacement (hard rebuild) — see useLiveSocket.
   const liveSocket = useLiveSocket();
 
@@ -242,13 +246,23 @@ export default function AdminConversationsPage() {
   // (e.g. tapping the "X unread" widget on the dashboard). Manual toggling still works afterwards.
   // Covers both a fresh mount (handled by the useState initializer above) and
   // same-instance navigations where only the query string changes.
+  //
+  // Deliberately depends only on `searchParams` (not `unreadOnly`): router.replace()
+  // from handleToggleUnread resolves asynchronously, so if this also re-ran whenever
+  // `unreadOnly` changed, it could fire on a render where `unreadOnly` already flipped
+  // to false but the URL hadn't caught up yet — reading the still-stale "?filter=unread"
+  // and forcing the filter back on. skipNextFilterSyncRef guards our own writes.
   useEffect(() => {
+    if (skipNextFilterSyncRef.current) {
+      skipNextFilterSyncRef.current = false;
+      return;
+    }
     if (searchParams.get('filter') !== 'unread' || unreadOnly) return;
     setUnreadOnly(true);
     setPage(1);
     void loadConversations(1, search, true, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, unreadOnly]);
+  }, [searchParams]);
 
   // Accurate unread-conversations count, independent of pagination/loaded page.
   const refreshUnreadCount = useCallback(async () => {
@@ -324,6 +338,7 @@ export default function AdminConversationsPage() {
 
   const handleToggleUnread = () => {
     const next = !unreadOnly;
+    skipNextFilterSyncRef.current = true;
     setUnreadOnly(next);
     setPage(1);
     void loadConversations(1, search, next, true);
