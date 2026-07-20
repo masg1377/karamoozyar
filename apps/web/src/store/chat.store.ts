@@ -21,6 +21,8 @@ interface ChatState {
   nextCursor: Record<string, string | null>;
 
   setConversations: (convs: ConversationSummaryDto[]) => void;
+  /** Append a freshly fetched page (infinite scroll), de-duped by id. */
+  appendConversations: (convs: ConversationSummaryDto[]) => void;
   updateConversation: (conv: ConversationSummaryDto) => void;
   /** Merge a freshly fetched page; preserves pending/failed local items. */
   mergeMessages: (conversationId: string, msgs: ChatMessage[], nextCursor: string | null) => void;
@@ -44,6 +46,13 @@ export const useChatStore = create<ChatState>((set) => ({
   nextCursor: {},
 
   setConversations: (convs) => set({ conversations: convs }),
+
+  appendConversations: (convs) =>
+    set((state) => {
+      const seen = new Set(state.conversations.map((c) => c.id));
+      const fresh = convs.filter((c) => !seen.has(c.id));
+      return { conversations: [...state.conversations, ...fresh] };
+    }),
 
   updateConversation: (conv) =>
     set((state) => {

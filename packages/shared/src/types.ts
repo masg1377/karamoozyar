@@ -176,7 +176,15 @@ export interface UploadResponseDto {
 
 export interface PaginatedResponse<T> {
   data: T[];
-  meta: { total: number; page: number; limit: number };
+  meta: {
+    total: number;
+    page: number;
+    limit: number;
+    /** Total count matching filters, independent of the current page (e.g. list-wide active count). */
+    activeCount?: number;
+    /** Total count matching filters, independent of the current page (e.g. list-wide inactive count). */
+    inactiveCount?: number;
+  };
 }
 
 export interface CursorPaginatedResponse<T> {

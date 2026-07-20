@@ -57,14 +57,18 @@ export class UsersService {
       } : {}),
     };
 
-    const [users, total] = await Promise.all([
+    const [users, total, activeCount] = await Promise.all([
       this.prisma.user.findMany({
         where, skip: (page - 1) * limit, take: limit, orderBy: { createdAt: 'desc' },
       }),
       this.prisma.user.count({ where }),
+      this.prisma.user.count({ where: { ...where, isActive: true } }),
     ]);
 
-    return { data: users.map(u => this.mapToDto(u)), meta: { total, page, limit } };
+    return {
+      data: users.map(u => this.mapToDto(u)),
+      meta: { total, page, limit, activeCount, inactiveCount: total - activeCount },
+    };
   }
 
   async findWithoutConversation(page: number, limit: number, search?: string): Promise<PaginatedResponse<UserDto>> {

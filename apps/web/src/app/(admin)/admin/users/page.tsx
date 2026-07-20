@@ -17,7 +17,7 @@ const GENDER_OPTIONS = [
 ];
 import {
   Search, UserPlus, Users, CheckCircle2, XCircle,
-  MessageSquare, Pencil, ChevronRight, ChevronLeft,
+  MessageSquare, Pencil,
   Camera, X, Save, Eye, EyeOff,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -25,7 +25,7 @@ import { toast } from 'sonner';
 
 interface UsersResponse {
   data: UserDto[];
-  meta: { total: number; page: number; limit: number };
+  meta: { total: number; page: number; limit: number; activeCount?: number; inactiveCount?: number };
 }
 
 const INPUT_CLS = 'w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-300 focus:bg-white transition-all';
@@ -335,120 +335,79 @@ function EditUserModal({ userId, onClose, onSaved }: EditModalProps) {
   );
 }
 
-// ─── Pagination ───────────────────────────────────────────────────────────────
-
-function Pagination({ page, totalPages, onChange }: { page: number; totalPages: number; onChange: (p: number) => void }) {
-  const [editing, setEditing] = useState(false);
-  const [inputVal, setInputVal] = useState('');
-
-  const go = (p: number) => onChange(Math.max(1, Math.min(totalPages, p)));
-
-  const commit = () => {
-    const n = parseInt(inputVal, 10);
-    if (!isNaN(n)) go(n);
-    setEditing(false);
-  };
-
-  // Build: 1, 2, …, page-1, page, page+1, …, last-1, last
-  const items: (number | 'ellipsis-start' | 'ellipsis-end')[] = [];
-  const show = new Set([1, 2, page - 1, page, page + 1, totalPages - 1, totalPages].filter(p => p >= 1 && p <= totalPages));
-  const sorted = Array.from(show).sort((a, b) => a - b);
-  sorted.forEach((p, i) => {
-    if (i > 0 && p - sorted[i - 1] > 1) items.push(i === 1 ? 'ellipsis-start' : 'ellipsis-end');
-    items.push(p);
-  });
-
-  return (
-    <div className="flex items-center justify-center gap-1 pt-2 flex-wrap">
-      <button onClick={() => go(page - 1)} disabled={page === 1}
-        className="w-8 h-8 flex items-center justify-center rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-        <ChevronRight className="w-4 h-4" />
-      </button>
-
-      {items.map((item, i) =>
-        item === 'ellipsis-start' || item === 'ellipsis-end' ? (
-          editing && item === 'ellipsis-end' ? (
-            <input
-              key="jump"
-              autoFocus
-              type="number"
-              defaultValue={page}
-              onChange={(e) => setInputVal(e.target.value)}
-              onBlur={commit}
-              onKeyDown={(e) => e.key === 'Enter' && commit()}
-              className="w-12 h-8 text-center text-sm border border-primary-300 ring-2 ring-primary-200 rounded-xl bg-white outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-            />
-          ) : (
-            <button key={item + String(i)} onClick={() => setEditing(true)}
-              className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-primary-600 text-sm transition-colors rounded-xl hover:bg-gray-50">
-              ···
-            </button>
-          )
-        ) : (
-          <button key={item} onClick={() => go(item as number)}
-            className={cn('w-8 h-8 rounded-xl text-sm font-medium transition-colors',
-              item === page ? 'bg-primary-600 text-white shadow-sm' : 'border border-gray-200 text-gray-600 hover:bg-gray-50'
-            )}>
-            {item}
-          </button>
-        )
-      )}
-
-      <button onClick={() => go(page + 1)} disabled={page === totalPages}
-        className="w-8 h-8 flex items-center justify-center rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-        <ChevronLeft className="w-4 h-4" />
-      </button>
-    </div>
-  );
-}
-
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<UserDto[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
   const [total, setTotal] = useState(0);
+  const [activeCount, setActiveCount] = useState(0);
+  const [inactiveCount, setInactiveCount] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
-  const loadUsers = useCallback(async (p: number, q: string) => {
-    setLoading(true);
+  // Fetch page p with query q; reset=true replaces the list, otherwise appends (infinite scroll)
+  const loadUsers = useCallback(async (p: number, q: string, reset: boolean) => {
+    if (reset) setLoading(true); else setLoadingMore(true);
     try {
       const res = await api.get<{ data: UsersResponse }>('/users', {
         params: { page: p, limit: LIMIT, search: q || undefined },
       });
-      setUsers(res.data.data.data);
-      setTotal(res.data.data.meta.total);
+      const { data, meta } = res.data.data;
+      setUsers((prev) => reset ? data : [...prev, ...data]);
+      setTotal(meta.total);
+      setActiveCount(meta.activeCount ?? 0);
+      setInactiveCount(meta.inactiveCount ?? 0);
+      setHasMore(p * LIMIT < meta.total);
     } catch {
-      // silent
+      setHasMore(false);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, []);
 
-  useEffect(() => { void loadUsers(1, ''); }, [loadUsers]);
+  useEffect(() => { void loadUsers(1, '', true); }, [loadUsers]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
       setPage(1);
-      void loadUsers(1, search);
+      void loadUsers(1, search, true);
     }, 350);
     return () => clearTimeout(timer);
   }, [search, loadUsers]);
 
-  const handlePageChange = (newPage: number) => {
-    setPage(newPage);
-    void loadUsers(newPage, search);
-  };
+  // Infinite scroll via IntersectionObserver
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasMore && !loadingMore && !loading) {
+          const nextPage = page + 1;
+          setPage(nextPage);
+          void loadUsers(nextPage, search, false);
+        }
+      },
+      { threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, loadingMore, loading, page, search, loadUsers]);
 
   const handleToggleStatus = async (u: UserDto) => {
     setTogglingId(u.id);
     try {
       await api.patch(`/users/${u.id}/status`, { isActive: !u.isActive });
       setUsers((prev) => prev.map((x) => x.id === u.id ? { ...x, isActive: !u.isActive } : x));
+      setActiveCount((c) => c + (u.isActive ? -1 : 1));
+      setInactiveCount((c) => c + (u.isActive ? 1 : -1));
       toast.success(u.isActive ? 'حساب غیرفعال شد' : 'حساب فعال شد');
     } catch {
       toast.error('تغییر وضعیت ناموفق بود');
@@ -456,9 +415,6 @@ export default function AdminUsersPage() {
       setTogglingId(null);
     }
   };
-
-  const totalPages = Math.ceil(total / LIMIT);
-  const activeCount = users.filter((u) => u.isActive).length;
 
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
@@ -483,7 +439,7 @@ export default function AdminUsersPage() {
         {[
           { label: 'کل', value: total, Icon: Users, color: 'text-primary-600 bg-primary-50' },
           { label: 'فعال', value: activeCount, Icon: CheckCircle2, color: 'text-green-600 bg-green-50' },
-          { label: 'غیرفعال', value: users.length - activeCount, Icon: XCircle, color: 'text-red-500 bg-red-50' },
+          { label: 'غیرفعال', value: inactiveCount, Icon: XCircle, color: 'text-red-500 bg-red-50' },
         ].map(({ label, value, Icon, color }) => (
           <div key={label} className="bg-white rounded-2xl p-3 border border-gray-100 shadow-sm flex items-center gap-2">
             <div className={cn('w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0', color)}>
@@ -591,17 +547,31 @@ export default function AdminUsersPage() {
               </div>
             );
           })}
+
+          {/* Infinite scroll sentinel */}
+          <div ref={sentinelRef} className="h-1" />
+
+          {loadingMore && (
+            <div className="flex items-center justify-center py-4">
+              <LoadingSpinner size="sm" />
+            </div>
+          )}
+
+          {!hasMore && users.length > 0 && (
+            <p className="text-center text-xs text-gray-300 py-2">پایان لیست</p>
+          )}
         </div>
       )}
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <Pagination page={page} totalPages={totalPages} onChange={handlePageChange} />
-      )}
-
       {/* Modals */}
-      {showCreate && <CreateUserModal onClose={() => setShowCreate(false)} onCreated={() => loadUsers(1, search)} />}
-      {editingUserId && <EditUserModal userId={editingUserId} onClose={() => setEditingUserId(null)} onSaved={() => loadUsers(page, search)} />}
+      {showCreate && <CreateUserModal onClose={() => setShowCreate(false)} onCreated={() => { setPage(1); void loadUsers(1, search, true); }} />}
+      {editingUserId && (
+        <EditUserModal
+          userId={editingUserId}
+          onClose={() => setEditingUserId(null)}
+          onSaved={() => { setPage(1); void loadUsers(1, search, true); }}
+        />
+      )}
     </div>
     </div>
   );

@@ -11,7 +11,7 @@ import { SOCKET_EVENTS } from '@karamooziyar/shared';
 import type { ConversationSummaryDto, UserDto } from '@karamooziyar/shared';
 import { cn, timeAgo } from '@/lib/utils';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
-import { MessageSquare, Search, Users, Plus, X, ChevronRight } from 'lucide-react';
+import { MessageSquare, Search, Users, Plus, X, ChevronRight, Filter } from 'lucide-react';
 import { UserAvatar } from '@/components/shared/UserAvatar';
 
 // ─── New Chat Modal (infinite scroll) ─────────────────────────────────────────
@@ -214,13 +214,18 @@ const LIMIT = 20;
 export default function AdminConversationsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { conversations, setConversations, updateConversation } = useChatStore();
+  const { conversations, setConversations, appendConversations, updateConversation } = useChatStore();
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [total, setTotal] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
   const [search, setSearch] = useState('');
+  const [unreadOnly, setUnreadOnly] = useState(() => searchParams.get('filter') === 'unread');
   const [showNewChat, setShowNewChat] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   // Reactive to socket replacement (hard rebuild) — see useLiveSocket.
   const liveSocket = useLiveSocket();
 
@@ -233,52 +238,102 @@ export default function AdminConversationsPage() {
       .catch(() => { /* fall through to list */ });
   }, [searchParams, router]);
 
-  const loadConversations = useCallback(async (p: number, q: string) => {
+  // Auto-activate the unread filter when navigated here with ?filter=unread
+  // (e.g. tapping the "X unread" widget on the dashboard). Manual toggling still works afterwards.
+  // Covers both a fresh mount (handled by the useState initializer above) and
+  // same-instance navigations where only the query string changes.
+  useEffect(() => {
+    if (searchParams.get('filter') !== 'unread' || unreadOnly) return;
+    setUnreadOnly(true);
+    setPage(1);
+    void loadConversations(1, search, true, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, unreadOnly]);
+
+  // Accurate unread-conversations count, independent of pagination/loaded page.
+  const refreshUnreadCount = useCallback(async () => {
+    try {
+      const res = await api.get<{ data: { meta: { total: number } } }>('/conversations', {
+        params: { page: 1, limit: 1, unreadOnly: true },
+      });
+      setUnreadCount(res.data.data.meta.total);
+    } catch {
+      // silent
+    }
+  }, []);
+
+  const loadConversations = useCallback(async (p: number, q: string, unread: boolean, reset: boolean) => {
+    if (reset) setLoading(true); else setLoadingMore(true);
     try {
       const params = new URLSearchParams({ page: String(p), limit: String(LIMIT) });
       if (q) params.set('search', q);
+      if (unread) params.set('unreadOnly', 'true');
       const res = await api.get<{ data: { data: ConversationSummaryDto[]; meta: { total: number } } }>(
         `/conversations?${params}`,
       );
-      setConversations(res.data.data.data);
-      setTotal(res.data.data.meta.total);
+      const { data, meta } = res.data.data;
+      if (reset) setConversations(data); else appendConversations(data);
+      setTotal(meta.total);
+      setHasMore(p * LIMIT < meta.total);
     } catch {
-      // silent
+      setHasMore(false);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  }, [setConversations]);
+  }, [setConversations, appendConversations]);
 
   useEffect(() => {
-    void loadConversations(1, '');
+    void loadConversations(1, search, unreadOnly, true);
+    void refreshUnreadCount();
 
     const socket = liveSocket;
     const onConvUpdated = (conv: ConversationSummaryDto) => {
       updateConversation(conv);
+      void refreshUnreadCount();
     };
     socket.on(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, onConvUpdated);
     return () => { socket.off(SOCKET_EVENTS.CHAT_CONVERSATION_UPDATED, onConvUpdated); };
-  }, [loadConversations, updateConversation, liveSocket]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [updateConversation, liveSocket, refreshUnreadCount]);
+
+  // Infinite scroll via IntersectionObserver
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasMore && !loadingMore && !loading) {
+          const nextPage = page + 1;
+          setPage(nextPage);
+          void loadConversations(nextPage, search, unreadOnly, false);
+        }
+      },
+      { threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, loadingMore, loading, page, search, unreadOnly, loadConversations]);
 
   const handleSearch = (val: string) => {
     setSearch(val);
     setPage(1);
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => void loadConversations(1, val), 300);
+    searchTimer.current = setTimeout(() => void loadConversations(1, val, unreadOnly, true), 300);
   };
 
-  const handlePage = (p: number) => {
-    setPage(p);
-    void loadConversations(p, search);
+  const handleToggleUnread = () => {
+    const next = !unreadOnly;
+    setUnreadOnly(next);
+    setPage(1);
+    void loadConversations(1, search, next, true);
+    router.replace(next ? '/admin/conversations?filter=unread' : '/admin/conversations', { scroll: false });
   };
 
   const handleStartChat = (conversationId: string) => {
     setShowNewChat(false);
     router.push(`/admin/conversations/${conversationId}`);
   };
-
-  const totalUnread = conversations.reduce((acc, c) => acc + c.unreadByAdmin, 0);
-  const totalPages = Math.ceil(total / LIMIT);
 
   if (loading) {
     return (
@@ -297,8 +352,8 @@ export default function AdminConversationsPage() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
               <h1 style={{ fontSize: 16, fontWeight: 700, color: '#1e293b', margin: 0 }}>گفتگوها</h1>
-              {totalUnread > 0 && (
-                <p style={{ fontSize: 12, color: '#EF4444', margin: '3px 0 0' }}>{totalUnread} پیام نخوانده</p>
+              {unreadCount > 0 && (
+                <p style={{ fontSize: 12, color: '#EF4444', margin: '3px 0 0' }}>{unreadCount} پیام نخوانده</p>
               )}
             </div>
             <button
@@ -320,6 +375,21 @@ export default function AdminConversationsPage() {
               style={{ background: 'transparent', fontSize: 13, color: '#374151', outline: 'none', width: '100%', border: 'none' }}
             />
           </div>
+          {/* Unread filter toggle */}
+          <button
+            onClick={handleToggleUnread}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+              background: unreadOnly ? 'linear-gradient(135deg, #0ABDE3, #0897B8)' : 'white',
+              color: unreadOnly ? 'white' : '#64748b',
+              fontSize: 12, fontWeight: 600, padding: '6px 12px', borderRadius: 12,
+              border: unreadOnly ? 'none' : '1px solid rgba(0,0,0,0.08)', cursor: 'pointer',
+              boxShadow: unreadOnly ? '0 2px 8px rgba(10,189,227,0.25)' : 'none',
+            }}
+          >
+            <Filter className="w-3.5 h-3.5" />
+            فقط نخوانده‌ها
+          </button>
         </div>
 
         {/* List */}
@@ -329,7 +399,9 @@ export default function AdminConversationsPage() {
               {search ? <Search className="w-7 h-7 text-gray-300" /> : <Users className="w-7 h-7 text-gray-300" />}
             </div>
             <p className="text-gray-400 text-sm">
-              {search ? 'نتیجه‌ای یافت نشد' : 'هنوز گفتگویی وجود ندارد'}
+              {search
+                ? 'نتیجه‌ای یافت نشد'
+                : unreadOnly ? 'پیام نخوانده‌ای وجود ندارد' : 'هنوز گفتگویی وجود ندارد'}
             </p>
           </div>
         ) : (
@@ -340,47 +412,17 @@ export default function AdminConversationsPage() {
           </div>
         )}
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-center gap-1.5 pt-2">
-            <button
-              onClick={() => handlePage(Math.max(1, page - 1))}
-              disabled={page === 1}
-              className="px-3 py-1.5 text-sm rounded-xl hover:bg-gray-100 disabled:opacity-40 transition-colors text-gray-600"
-            >
-              قبلی
-            </button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1)
-              .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
-              .reduce<(number | '...')[]>((acc, p, i, arr) => {
-                if (i > 0 && (p as number) - (arr[i - 1] as number) > 1) acc.push('...');
-                acc.push(p);
-                return acc;
-              }, [])
-              .map((p, i) =>
-                p === '...' ? (
-                  <span key={`ellipsis-${i}`} className="px-1 text-gray-400 text-sm">…</span>
-                ) : (
-                  <button
-                    key={p}
-                    onClick={() => handlePage(p as number)}
-                    className={cn(
-                      'w-8 h-8 rounded-xl text-sm font-medium transition-colors',
-                      p === page ? 'bg-primary-600 text-white' : 'text-gray-500 hover:bg-gray-100',
-                    )}
-                  >
-                    {p}
-                  </button>
-                ),
-              )}
-            <button
-              onClick={() => handlePage(Math.min(totalPages, page + 1))}
-              disabled={page === totalPages}
-              className="px-3 py-1.5 text-sm rounded-xl hover:bg-gray-100 disabled:opacity-40 transition-colors text-gray-600"
-            >
-              بعدی
-            </button>
+        {/* Infinite scroll sentinel */}
+        <div ref={sentinelRef} className="h-1" />
+
+        {loadingMore && (
+          <div className="flex items-center justify-center py-4">
+            <LoadingSpinner size="sm" />
           </div>
+        )}
+
+        {!hasMore && conversations.length > 0 && (
+          <p className="text-center text-xs text-gray-300">پایان لیست</p>
         )}
 
         {total > 0 && (

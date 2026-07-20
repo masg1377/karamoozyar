@@ -50,9 +50,10 @@ export class ConversationsService {
 
   // ─── Admin: list conversations ──────────────────────────────
 
-  async findAllForAdmin(page: number, limit: number, search?: string): Promise<PaginatedResponse<ConversationSummaryDto>> {
+  async findAllForAdmin(page: number, limit: number, search?: string, unreadOnly?: boolean): Promise<PaginatedResponse<ConversationSummaryDto>> {
     const where = {
       lastMessageAt: { not: null },
+      ...(unreadOnly ? { unreadByAdmin: { gt: 0 } } : {}),
       user: {
         deletedAt: null,
         ...(search ? { OR: [

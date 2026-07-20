@@ -166,7 +166,7 @@ export default function AdminDashboardPage() {
 
             {/* Item 2 */}
             {stats.unreadConversations > 0 && (
-              <Link href="/admin/conversations" style={{
+              <Link href="/admin/conversations?filter=unread" style={{
                 background: 'white', borderRadius: 18, padding: '14px 14px', textDecoration: 'none',
                 display: 'flex', alignItems: 'center', gap: 12,
                 boxShadow: '0 2px 10px rgba(0,0,0,0.04)', border: '1px solid rgba(10,189,227,0.07)',

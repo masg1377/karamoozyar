@@ -173,6 +173,11 @@ export const PagePaginationSchema = z.object({
   search: z.string().optional(),
 });
 
+export const ConversationsPaginationSchema = PagePaginationSchema.extend({
+  /** When true, only return conversations with unread admin messages. */
+  unreadOnly: z.coerce.boolean().optional(),
+});
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type SendOtpInput = z.infer<typeof SendOtpSchema>;

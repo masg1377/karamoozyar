@@ -22,7 +22,7 @@ import {
   SendMessageSchema,
   EditMessageSchema,
   CursorPaginationSchema,
-  PagePaginationSchema,
+  ConversationsPaginationSchema,
   type SendMessageInput,
   type EditMessageInput,
 } from '@karamooziyar/shared';
@@ -36,10 +36,10 @@ export class ConversationsController {
   @Get()
   @Roles(Role.ADMIN)
   findAll(
-    @Query(new ZodValidationPipe(PagePaginationSchema))
-    query: { page: number; limit: number; search?: string },
+    @Query(new ZodValidationPipe(ConversationsPaginationSchema))
+    query: { page: number; limit: number; search?: string; unreadOnly?: boolean },
   ) {
-    return this.conversationsService.findAllForAdmin(query.page, query.limit, query.search);
+    return this.conversationsService.findAllForAdmin(query.page, query.limit, query.search, query.unreadOnly);
   }
 
   // User: get my conversation
