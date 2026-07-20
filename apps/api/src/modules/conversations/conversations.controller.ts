@@ -37,7 +37,7 @@ export class ConversationsController {
   @Roles(Role.ADMIN)
   findAll(
     @Query(new ZodValidationPipe(ConversationsPaginationSchema))
-    query: { page: number; limit: number; search?: string; unreadOnly?: boolean },
+    query: { page: number; limit: number; search?: string; unreadOnly: boolean },
   ) {
     return this.conversationsService.findAllForAdmin(query.page, query.limit, query.search, query.unreadOnly);
   }

@@ -174,8 +174,16 @@ export const PagePaginationSchema = z.object({
 });
 
 export const ConversationsPaginationSchema = PagePaginationSchema.extend({
-  /** When true, only return conversations with unread admin messages. */
-  unreadOnly: z.coerce.boolean().optional(),
+  /**
+   * When true, only return conversations with unread admin messages.
+   * Accepts real booleans or the strings "true"/"false" (query params arrive
+   * as strings); `z.coerce.boolean()` is intentionally NOT used here since it
+   * would treat the string "false" as truthy.
+   */
+  unreadOnly: z
+    .union([z.boolean(), z.string()])
+    .optional()
+    .transform((v) => v === true || v === 'true'),
 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
